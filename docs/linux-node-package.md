@@ -360,3 +360,6 @@ Checked while writing this file:
 - Tauri CLI 2.12.4 bundler source for deb paths, omitted `Depends` when the list is empty, and the desktop template. No deb was produced, so those paths are not an artifact listing.
 
 Not run: `npm test`, `npm run lint`, `npm run build`, cargo fmt/clippy/tests, `tauri build`, `dpkg-deb`, apt install, Xvfb, `npm run recovery`. The cargo and npm gates are the green main CI, not a new local run. There is no markdown link checker in this repo.
+
+- npm test / lint / build and cargo gates were not re-run locally; existing CI on this PR is the check
+- tauri build was not run (no deb)
