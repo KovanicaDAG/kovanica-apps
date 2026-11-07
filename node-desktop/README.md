@@ -45,6 +45,31 @@ Nonzero recovery was run on 2026-11-07 on Xvfb `:99` (openbox; the form was fill
 
 With the producer paused (`SIGSTOP`), the observer reported `committedHeight` 3 and author-0 reward balance `7500000000` (3 × 2.5 KVNC) via `kovanica_getBalance`. Stop in this window reaped that child with exit code 0; a bystander process was not signaled. Start on the same data directory, producer still paused, reported `committedHeight` 3, `peerCount` 0, and the same reward balance before any peer reconnect. The monitor showed those values with freshness `current` and left the missing health error as `unknown`, not zero. Resuming the producer advanced the supervised node to `committedHeight` 4 and reward balance `10000000000`. The app still does not start a validator or a miner. L1 logged that a commit seal was not stored because the staking committee was empty; PoW commitment and the reward balance still advanced. `/health` execution counters stayed `starting` / 0 across that restart; the recovered balance was read with `kovanica_getBalance`, not from those counters.
 
+## Repeat the recovery suite
+
+From `node-desktop/`:
+
+```text
+npm run recovery
+```
+
+That is `scripts/recovery-suite.sh`. It runs the existing frontend tests and the locked library tests, including the restart regression, then the live half. The outer bound is 12 minutes for the live process, and each wait inside it is shorter.
+
+| Exit | Meaning |
+|---|---|
+| 0 | Mocked checks passed and the live chain-5 run passed. |
+| 2 | Live half **BLOCKED**. Not a pass. `recovery-artifacts/report.json` names the missing prerequisite. |
+| other | An assertion, build, or timeout failed. |
+
+Live mode does not pick a binary from an L1 checkout and does not fall back to chain 1337. It does not set `KOVANICA_TEST_TARGET_BITS`. If that variable or any other `KOVANICA_*` name is set, the live half stops as BLOCKED and does not show the value. Required environment, both absolute paths:
+
+- `NODE_RECOVERY_BIN` — the `kovanica-node` executable to supervise and to use as the external producer
+- `NODE_RECOVERY_FUNDED_ACCOUNTS` — the chain-5 `funded_accounts.toml` published with that node's image (`ops/docker/chain5/funded_accounts.toml` in the L1 tree). This repo does not embed it.
+
+The report records the binary path, SHA-256, and the `--version` probe. Cargo features are not exposed by the CLI, so the report says they were not inferred. It also records the chain-5 network tag, the funded-account file SHA-256, a sanitized config (`validator_key` redacted), and separate admitted (`kovanica_getDagTips` `max_round`), committed (`kovanica_syncStatus` `committedHeight`), and executed (`kovanica_getBalance`) results. Height alone is not a pass. The supervised process stays non-mining and non-validator. Stop is not allowed to kill the bystander the suite spawns. Disposable data directories created by the run are removed; other data directories are not.
+
+CI runs `npm test` and `cargo test --lib` (see `.github/workflows/node-desktop.yml`). Those include the mocked restart, unexpected-exit, stale-monitor, and bystander regressions. CI does not start a `kovanica-node` and does not treat a missing live binary as a green recovery.
+
 ## Process control
 
 - Start and Stop are explicit.

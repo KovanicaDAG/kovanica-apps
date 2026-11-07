@@ -451,4 +451,165 @@ mod tests {
             WindowClose::AllowExit => panic!("unconfirmed stop would close the window"),
         }
     }
+
+    #[test]
+    fn recovery_session_restart_rejects_stale_monitor() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path().join("data");
+        fs::create_dir(&data).unwrap();
+        let marker = data.join("KEEP");
+        fs::write(&marker, b"do-not-delete").unwrap();
+        let binary = hold_script(tmp.path());
+        let bystander_path = tmp.path().join("bystander.sh");
+        fs::write(
+            &bystander_path,
+            "#!/bin/sh\nwhile true; do sleep 0.2; done\n",
+        )
+        .unwrap();
+        let mut mode = fs::metadata(&bystander_path).unwrap().permissions();
+        mode.set_mode(0o755);
+        fs::set_permissions(&bystander_path, mode).unwrap();
+        let mut bystander = std::process::Command::new(&bystander_path).spawn().unwrap();
+        let bystander_pid = bystander.id();
+        struct KillPid(u32);
+        impl Drop for KillPid {
+            fn drop(&mut self) {
+                if self.0 != 0 {
+                    unsafe {
+                        libc::kill(self.0 as i32, libc::SIGKILL);
+                    }
+                }
+            }
+        }
+        let _bystander_guard = KillPid(bystander_pid);
+
+        let session = Session::new(Duration::from_millis(400));
+        struct StopGuard<'a>(&'a Session);
+        impl Drop for StopGuard<'_> {
+            fn drop(&mut self) {
+                let _ = self.0.stop_owned();
+            }
+        }
+        let _stop_guard = StopGuard(&session);
+
+        session
+            .supervisor
+            .start(&binary, Path::new("/tmp/unused.toml"))
+            .unwrap();
+        let first_pid = session.supervisor.status().pid.expect("owned pid");
+        assert_ne!(first_pid, bystander_pid);
+        session.attach_checked(sample_setup());
+        let now = Instant::now();
+        let BeginPoll::Fetch {
+            generation: first_gen,
+            ..
+        } = session.begin_monitor_poll(now)
+        else {
+            panic!("expected a fetch on the first session");
+        };
+        let mut live = MonitorView::unknown();
+        live.rpc = RpcReach::Reachable;
+        live.sync.committed_height = Field::value("4");
+        live.sync.local_tip_round = Field::value("4");
+        live.health.status = Field::value("ok");
+        session.finish_monitor_ok(first_gen, now, live);
+        assert_eq!(
+            session.snapshot().monitor.sync.committed_height,
+            Field::value("4")
+        );
+
+        assert_eq!(unsafe { libc::kill(first_pid as i32, libc::SIGKILL) }, 0);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if session.supervisor.status().state == ProcessState::Exited {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "unexpected child exit was not observed"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        let crashed = session.snapshot();
+        assert_eq!(crashed.process.state, ProcessState::Exited);
+        assert_eq!(crashed.process.pid, None);
+        assert_ne!(crashed.monitor.sync.committed_height, Field::value("4"));
+        assert_ne!(crashed.monitor.sync.committed_height, Field::value("0"));
+        assert_eq!(crashed.monitor.health.status.kind, FieldKind::Unavailable);
+        assert!(crashed.monitor.detail.unwrap().contains("not live"));
+        assert!(
+            process_alive(bystander_pid),
+            "unexpected exit path killed a bystander"
+        );
+
+        let mut stale = MonitorView::unknown();
+        stale.rpc = RpcReach::Reachable;
+        stale.sync.committed_height = Field::value("99");
+        session.finish_monitor_ok(first_gen, Instant::now(), stale);
+        assert_ne!(
+            session.snapshot().monitor.sync.committed_height,
+            Field::value("99")
+        );
+
+        session
+            .supervisor
+            .start(&binary, Path::new("/tmp/unused.toml"))
+            .unwrap();
+        let second_pid = session.supervisor.status().pid.expect("restarted pid");
+        assert_ne!(second_pid, first_pid);
+        assert_ne!(second_pid, bystander_pid);
+        session.attach_checked(sample_setup());
+        let restarted = session.snapshot();
+        assert_eq!(restarted.process.state, ProcessState::Running);
+        assert_ne!(
+            restarted.monitor.sync.committed_height,
+            Field::value("4"),
+            "pre-restart height survived into the new session"
+        );
+        assert_ne!(restarted.monitor.sync.committed_height, Field::value("99"));
+        let later = Instant::now();
+        let BeginPoll::Fetch {
+            generation: second_gen,
+            ..
+        } = session.begin_monitor_poll(later)
+        else {
+            panic!("expected a fetch after restart");
+        };
+        assert_ne!(second_gen, first_gen);
+        let mut fresh = MonitorView::unknown();
+        fresh.rpc = RpcReach::Reachable;
+        fresh.sync.committed_height = Field::value("7");
+        fresh.sync.local_tip_round = Field::value("8");
+        fresh.health.execution_state = Field::value("running");
+        session.finish_monitor_ok(second_gen, later, fresh);
+        session.finish_monitor_ok(first_gen, Instant::now(), {
+            let mut old = MonitorView::unknown();
+            old.rpc = RpcReach::Reachable;
+            old.sync.committed_height = Field::value("99");
+            old
+        });
+        session.finish_monitor_err(first_gen, Instant::now(), "stale session".into());
+        let shown = session.snapshot();
+        assert_eq!(shown.monitor.sync.committed_height, Field::value("7"));
+        assert_eq!(shown.monitor.sync.local_tip_round, Field::value("8"));
+        assert_eq!(shown.monitor.rpc, RpcReach::Reachable);
+        assert!(!shown.monitor.stale);
+        assert_eq!(shown.monitor.last_success_age_ms, Some(0));
+        assert_eq!(fs::read(&marker).unwrap(), b"do-not-delete");
+
+        session.stop_owned().unwrap();
+        let stopped = session.snapshot();
+        assert_eq!(stopped.process.state, ProcessState::Exited);
+        assert_ne!(stopped.monitor.sync.committed_height, Field::value("7"));
+        assert_ne!(stopped.monitor.sync.committed_height, Field::value("0"));
+        assert!(process_alive(bystander_pid), "stop killed a bystander");
+        assert!(!process_alive(second_pid));
+        assert_eq!(fs::read(&marker).unwrap(), b"do-not-delete");
+        let _ = bystander.kill();
+        let _ = bystander.wait();
+    }
+
+    fn process_alive(pid: u32) -> bool {
+        unsafe { libc::kill(pid as i32, 0) == 0 }
+    }
 }
