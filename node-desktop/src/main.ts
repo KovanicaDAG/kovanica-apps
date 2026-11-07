@@ -1,300 +1,254 @@
 import { invoke } from "@tauri-apps/api/core";
+import { fieldText, pathsReady, type Field } from "./format";
 
-/* ---------------------- DOM elements ---------------------- */
+interface CheckedSetup {
+  binary: string;
+  binarySha256: string;
+  configPath: string;
+  dataDir: string;
+  chainId: number;
+  chainLabel: string;
+  chainIdFromFile: boolean;
+  rpcHttp: string;
+  listenAddr: string;
+}
+
+interface ProcessStatus {
+  state: "stopped" | "starting" | "running" | "stopping" | "exited";
+  pid: number | null;
+  exitCode: number | null;
+  lastError: string | null;
+  logs: string[];
+}
+
+interface Snapshot {
+  process: ProcessStatus;
+  monitor: {
+    rpc: "unknown" | "reachable" | "unreachable";
+    health: Record<string, Field>;
+    sync: Record<string, Field>;
+    stale: boolean;
+    lastSuccessAgeMs: number | null;
+    detail: string | null;
+  };
+  setup: CheckedSetup | null;
+  reviewedNodeSource: string;
+  stopGraceSecs: number;
+  exitStopsOwnedChild: boolean;
+}
+
+const binaryInput = control<HTMLInputElement>("#binary-path");
+const configInput = control<HTMLInputElement>("#config-path");
+const dataInput = control<HTMLInputElement>("#data-path");
+const checkButton = control<HTMLButtonElement>("#check-button");
+const startButton = control<HTMLButtonElement>("#start-button");
+const stopButton = control<HTMLButtonElement>("#stop-button");
+const setupError = control<HTMLParagraphElement>("#setup-error");
+const setupSummary = control<HTMLParagraphElement>("#setup-summary");
+const processReadout = control<HTMLDListElement>("#process-readout");
+const monitorReadout = control<HTMLDListElement>("#monitor-readout");
+const logViewer = control<HTMLDivElement>("#log-viewer");
+
+let checkedKey = "";
+let pollTimer = 0;
+let refreshInFlight = false;
+
 function control<T extends Element>(selector: string): T {
   const found = document.querySelector<T>(selector);
-  if (!found) throw new Error(`Node-desktop UI is missing ${selector}.`);
+  if (!found) throw new Error(`Node UI is missing ${selector}.`);
   return found;
 }
 
-const startBtn = control<HTMLButtonElement>("#start-button");
-const stopBtn = control<HTMLButtonElement>("#stop-button");
-const validatorToggle = control<HTMLInputElement>("#validator-toggle");
-const validatorStatus = control<HTMLParagraphElement>("#validator-status");
-const stakeBtn = control<HTMLButtonElement>("#stake-button");
-const keepRunning = control<HTMLInputElement>("#keep-running");
-const logViewer = control<HTMLDivElement>("#log-viewer");
-const statusDl = control<HTMLDListElement>("#status");
-const validatorStakeValue = control<HTMLSpanElement>("#validator-stake-value");
-const validatorShortfall = control<HTMLSpanElement>("#validator-shortfall");
-const validatorShortfallValue = control<HTMLSpanElement>("#validator-shortfall-value");
-
-/* ---------------------- DTOs ---------------------- */
-interface StatusDto {
-  state: string;
-  pid: number | null;
-  network_tag: string | null;
-  expected_tag: string;
-  chain_id: number;
-  committed_height: number | null;
-  local_round: number | null;
-  peer_count: number | null;
-  catching_up: boolean | null;
-  rpc_url: string;
-  data_dir: string;
-  config_path: string;
-  last_error: string | null;
+function keyNow(): string {
+  return `${binaryInput.value}\n${configInput.value}\n${dataInput.value}`;
 }
 
-interface ValidatorDto {
-  run_validator: boolean;
-  has_key: boolean;
-  key_address: string | null;
-  stake_atoms: string | null;
-  stake_kuna: string | null;
-  min_stake_atoms: string;
-  min_stake_kuna: string;
-  eligible: boolean;
-  can_toggle: boolean;
-  stake_available: boolean;
-  message: string | null;
-}
-
-interface ActionResult {
-  ok: boolean;
-  message: string | null;
-  tx_id: string | null;
-}
-
-interface SettingsDto {
-  keep_running: boolean;
-}
-
-/* ---------------------- Helpers ---------------------- */
 function showError(message: string): void {
-  console.error(message);
+  setupError.hidden = false;
+  setupError.textContent = message;
 }
 
-function clearNode(): void {
-  statusDl.replaceChildren();
+function clearError(): void {
+  setupError.hidden = true;
+  setupError.textContent = "";
 }
 
-function fillRows(rows: { label: string; value: string }[]): void {
-  statusDl.replaceChildren();
-  for (const row of rows) {
+function fill(list: HTMLDListElement, rows: Array<[string, string]>): void {
+  list.replaceChildren();
+  for (const [label, value] of rows) {
     const term = document.createElement("dt");
-    term.textContent = row.label;
-    const value = document.createElement("dd");
-    value.textContent = row.value;
-    statusDl.append(term, value);
+    term.textContent = label;
+    const description = document.createElement("dd");
+    description.textContent = value;
+    list.append(term, description);
   }
 }
 
-function addLogLine(line: string): void {
-  const pre = document.createElement("pre");
-  pre.textContent = line;
-  logViewer.appendChild(pre);
-  const children = logViewer.children;
-  while (children.length > 200) {
-    logViewer.removeChild(children[0]);
-  }
-}
-
-let currentStatus: StatusDto | null = null;
-
-async function loadStatus(): Promise<void> {
-  try {
-    const status = await invoke<StatusDto>("node_status");
-    currentStatus = status;
-    if (status.state !== "running") {
-      updateUIStopped(status);
-      return;
-    }
-    updateUIRunning(status);
-  } catch (err) {
-    showError(`Failed to load status: ${err}`);
-    updateUIStopped(null);
-  }
-}
-
-function updateUIStopped(_status: StatusDto | null): void {
-  startBtn.disabled = false;
-  stopBtn.disabled = true;
-  validatorToggle.disabled = true;
-  validatorToggle.checked = false;
-  stakeBtn.disabled = true;
-  stakeBtn.textContent = "Stake (add missing KUNA)";
-  validatorStatus.hidden = true;
-  clearNode();
-  if (_status) {
-    fillRows([
-      { label: "state", value: _status.state },
-      { label: "expected tag", value: _status.expected_tag },
-    ]);
-  }
-}
-
-function updateUIRunning(status: StatusDto): void {
-  startBtn.disabled = true;
-  stopBtn.disabled = false;
-
-  fillRows([
-    { label: "state", value: status.state },
-    { label: "pid", value: status.pid !== null ? String(status.pid) : "—" },
-    { label: "chain id", value: String(status.chain_id) },
-    { label: "network tag", value: status.network_tag ?? "—" },
-    { label: "committed height", value: status.committed_height !== null ? String(status.committed_height) : "—" },
-    { label: "local round", value: status.local_round !== null ? String(status.local_round) : "—" },
-    { label: "peer count", value: status.peer_count !== null ? String(status.peer_count) : "—" },
-    { label: "catching up", value: status.catching_up !== null ? String(status.catching_up) : "—" },
-    { label: "rpc url", value: status.rpc_url },
+function renderProcess(snapshot: Snapshot): void {
+  const process = snapshot.process;
+  const running = process.state === "running" || process.state === "starting";
+  startButton.disabled = running || checkedKey === "" || checkedKey !== keyNow();
+  stopButton.disabled = !running && process.state !== "stopping";
+  fill(processReadout, [
+    ["Process", process.state],
+    ["PID", process.pid === null ? "none" : String(process.pid)],
+    ["Exit code", process.exitCode === null ? "none" : String(process.exitCode)],
+    ["Last error", process.lastError ?? "none"],
+    ["Reviewed node source", snapshot.reviewedNodeSource],
+    ["Stop grace", `${snapshot.stopGraceSecs}s SIGTERM, then SIGKILL`],
+    ["On window close", snapshot.exitStopsOwnedChild
+      ? "same Stop; stays open if the child is not confirmed exited"
+      : "unknown"],
   ]);
-
-  void loadValidator();
+  logViewer.replaceChildren();
+  for (const line of process.logs) {
+    const row = document.createElement("pre");
+    row.textContent = line;
+    logViewer.append(row);
+  }
+  logViewer.scrollTop = logViewer.scrollHeight;
 }
 
-async function loadValidator(): Promise<void> {
+function renderMonitor(snapshot: Snapshot): void {
+  const monitor = snapshot.monitor;
+  const health = monitor.health;
+  const sync = snapshot.monitor.sync;
+  const stale =
+    monitor.stale && monitor.lastSuccessAgeMs !== null
+      ? `stale last success ${Math.round(monitor.lastSuccessAgeMs / 1000)}s ago`
+      : "current";
+  fill(monitorReadout, [
+    ["RPC", monitor.rpc],
+    ["Freshness", stale],
+    ["Monitor detail", monitor.detail ?? "none"],
+    ["Health status", fieldText(health.status)],
+    ["Health HTTP", fieldText(health.httpStatus)],
+    ["Health flag", fieldText(health.healthy)],
+    ["Health peer count", fieldText(health.peerCount)],
+    ["Execution", fieldText(health.executionState)],
+    ["Consensus", fieldText(health.consensusState)],
+    ["Health error", fieldText(health.lastError)],
+    ["Committed height", fieldText(sync.committedHeight)],
+    ["Local tip round", fieldText(sync.localTipRound)],
+    ["Catching up", fieldText(sync.catchingUp)],
+    ["Sync peer count", fieldText(sync.peerCount)],
+    ["Network tag", fieldText(sync.networkTag)],
+    ["Peer ids", fieldText(sync.peerIds)],
+  ]);
+}
+
+function renderSummary(setup: CheckedSetup): void {
+  const source = setup.chainIdFromFile ? "from the config file" : "node default; chain_id is not in the file";
+  setupSummary.textContent = [
+    `${setup.chainLabel} (${source}).`,
+    `RPC ${setup.rpcHttp}.`,
+    `P2P listen ${setup.listenAddr} (shown, not rewritten).`,
+    `Data ${setup.dataDir}.`,
+    `Executable SHA-256 ${setup.binarySha256}.`,
+    "The checksum identifies those bytes. It does not prove who built them.",
+  ].join(" ");
+}
+
+async function refreshStatus(): Promise<void> {
   try {
-    const v = await invoke<ValidatorDto>("validator_state");
-    applyValidatorUI(v);
-  } catch (err) {
-    showError(`Failed to load validator state: ${err}`);
+    const snapshot = await invoke<Snapshot>("node_status");
+    renderProcess(snapshot);
+    renderMonitor(snapshot);
+  } catch (error) {
+    showError(error instanceof Error ? error.message : String(error));
   }
 }
 
-function applyValidatorUI(v: ValidatorDto): void {
-  validatorToggle.disabled = !v.can_toggle;
-  validatorToggle.checked = v.run_validator;
-  validatorToggle.indeterminate = false;
-
-  if (v.run_validator) {
-    validatorStatus.hidden = false;
-    if (v.stake_kuna !== null) {
-      validatorStakeValue.textContent = v.stake_kuna;
-    }
-    stakeBtn.disabled = !v.stake_available;
-    stakeBtn.textContent = "Running as validator";
-  } else {
-    validatorStatus.hidden = true;
-    stakeBtn.disabled = !v.stake_available;
-    stakeBtn.textContent = "Stake (add missing KUNA)";
-  }
-
-  if (v.stake_atoms !== null) {
-    const stakeNum = Number(v.stake_kuna ?? "0");
-    if (stakeNum < 50000) {
-      validatorShortfall.hidden = false;
-      validatorShortfallValue.textContent = String(50000 - Math.floor(stakeNum));
-      stakeBtn.disabled = true;
-      stakeBtn.textContent = "Stake (add missing KUNA)";
-    } else {
-      validatorShortfall.hidden = true;
-    }
-  } else {
-    validatorShortfall.hidden = true;
-  }
-
-  if (v.message) {
-    showError(v.message);
-  }
-}
-
-async function loadSettings(): Promise<void> {
+async function refreshMonitor(): Promise<void> {
+  if (refreshInFlight || document.hidden) return;
+  refreshInFlight = true;
   try {
-    const s = await invoke<SettingsDto>("settings_get");
-    keepRunning.checked = s.keep_running;
-  } catch (err) {
-    showError(`Failed to load settings: ${err}`);
-  }
-}
-
-async function loadLogs(): Promise<void> {
-  try {
-    const logs = await invoke<string[]>("node_logs");
-    // only append new tail
-    logViewer.innerHTML = "";
-    for (const line of logs) {
-      addLogLine(line);
-    }
-  } catch (err) {
-    showError(`Failed to load logs: ${err}`);
-  }
-}
-
-/* ---------------------- Event listeners ---------------------- */
-startBtn.addEventListener("click", async () => {
-  startBtn.disabled = true;
-  startBtn.textContent = "Starting...";
-  try {
-    await invoke("node_start");
-    await loadStatus();
-  } catch (err) {
-    showError(`Failed to start: ${err}`);
+    const snapshot = await invoke<Snapshot>("monitor_refresh");
+    renderProcess(snapshot);
+    renderMonitor(snapshot);
+  } catch (error) {
+    showError(error instanceof Error ? error.message : String(error));
   } finally {
-    startBtn.disabled = false;
-    startBtn.textContent = "Start";
-  }
-});
-
-stopBtn.addEventListener("click", async () => {
-  stopBtn.disabled = true;
-  stopBtn.textContent = "Stopping...";
-  try {
-    await invoke("node_stop");
-    await loadStatus();
-  } catch (err) {
-    showError(`Failed to stop: ${err}`);
-  } finally {
-    stopBtn.disabled = false;
-    stopBtn.textContent = "Stop";
-  }
-});
-
-validatorToggle.addEventListener("change", async () => {
-  const desired = validatorToggle.checked;
-  validatorToggle.disabled = true;
-  validatorToggle.indeterminate = true;
-  try {
-    await invoke("set_run_validator", { enabled: desired });
-    await loadValidator();
-  } catch (err) {
-    showError(`Failed to toggle validator: ${err}`);
-    validatorToggle.checked = !desired;
-  } finally {
-    validatorToggle.disabled = false;
-    validatorToggle.indeterminate = false;
-  }
-});
-
-stakeBtn.addEventListener("click", async () => {
-  const amount = window.prompt("Amount in KUNA to stake:") ?? "";
-  if (!amount) return;
-  stakeBtn.disabled = true;
-  stakeBtn.textContent = "Staking...";
-  try {
-    const res = await invoke<ActionResult>("stake", { amount_kuna: amount });
-    if (!res.ok) {
-      showError(res.message ?? "Stake failed");
-    }
-    await loadValidator();
-  } catch (err) {
-    showError(`Stake failed: ${err}`);
-  } finally {
-    stakeBtn.disabled = false;
-    stakeBtn.textContent = "Stake (add missing KUNA)";
-  }
-});
-
-keepRunning.addEventListener("change", async () => {
-  try {
-    await invoke("set_keep_running", { enabled: keepRunning.checked });
-  } catch (err) {
-    showError(`Failed to save settings: ${err}`);
-  }
-});
-
-/* ---------------------- Polling ---------------------- */
-async function poll(): Promise<void> {
-  await loadStatus();
-  if (currentStatus && currentStatus.state === "running") {
-    await loadLogs();
+    refreshInFlight = false;
   }
 }
 
-void (async () => {
-  await loadSettings();
-  await poll();
-  window.setInterval(() => {
-    void poll();
-  }, 1500);
-})();
+function invalidate(): void {
+  if (checkedKey !== keyNow()) {
+    startButton.disabled = true;
+    setupSummary.textContent = "";
+  }
+}
+
+for (const input of [binaryInput, configInput, dataInput]) {
+  input.addEventListener("input", invalidate);
+}
+
+checkButton.addEventListener("click", async () => {
+  clearError();
+  if (!pathsReady(binaryInput.value, configInput.value, dataInput.value)) {
+    showError("Enter the executable, config file, and data directory before checking.");
+    checkButton.focus();
+    return;
+  }
+  try {
+    const setup = await invoke<CheckedSetup>("inspect_setup", {
+      binary: binaryInput.value,
+      configPath: configInput.value,
+      dataDir: dataInput.value,
+    });
+    checkedKey = keyNow();
+    renderSummary(setup);
+    startButton.disabled = false;
+    startButton.focus();
+  } catch (error) {
+    checkedKey = "";
+    startButton.disabled = true;
+    showError(error instanceof Error ? error.message : String(error));
+  }
+});
+
+startButton.addEventListener("click", async () => {
+  clearError();
+  startButton.disabled = true;
+  try {
+    const snapshot = await invoke<Snapshot>("node_start", {
+      binary: binaryInput.value,
+      configPath: configInput.value,
+      dataDir: dataInput.value,
+    });
+    renderProcess(snapshot);
+    renderMonitor(snapshot);
+  } catch (error) {
+    showError(error instanceof Error ? error.message : String(error));
+    startButton.disabled = checkedKey === "" || checkedKey !== keyNow();
+  }
+});
+
+stopButton.addEventListener("click", async () => {
+  clearError();
+  stopButton.disabled = true;
+  try {
+    const snapshot = await invoke<Snapshot>("node_stop");
+    renderProcess(snapshot);
+    renderMonitor(snapshot);
+  } catch (error) {
+    showError(error instanceof Error ? error.message : String(error));
+  }
+});
+
+document.addEventListener("visibilitychange", () => {
+  void invoke("set_monitor_paused", { paused: document.hidden }).catch(() => undefined);
+  if (!document.hidden) void refreshMonitor();
+});
+
+pollTimer = window.setInterval(() => {
+  void refreshStatus();
+  if (!document.hidden) void refreshMonitor();
+}, 2000);
+
+window.addEventListener("beforeunload", () => {
+  window.clearInterval(pollTimer);
+});
+
+void refreshStatus();
