@@ -7,53 +7,60 @@
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
+    <a class="skip" href="#setup-heading">Skip to setup</a>
+    <header class="top">
+      <div>
+        <h1>Kovanica Node</h1>
+        <p class="muted">Linux supervisor · milestone 1</p>
+      </div>
+    </header>
+    <p id="dev-warning" class="banner" role="status">
+      Development and testnet supervisor only. Not mainnet and not real-value ready.
+      This window does not mine, stake, or hold keys. Closing it stops the node this app started.
+    </p>
     <main class="app">
-      <header class="top">
-        <div>
-          <h1>Kovanica Node</h1>
-          <p class="muted">0.1.0 · chain 4 (testnet)</p>
+      <section class="panel" aria-labelledby="setup-heading">
+        <h2 id="setup-heading">Setup</h2>
+        <p class="note">
+          Absolute paths only. The app does not search PATH, download a binary, or write a config.
+        </p>
+        <div class="fields">
+          <label for="binary-path">Node executable</label>
+          <input id="binary-path" name="binary" autocomplete="off" spellcheck="false" />
+          <label for="config-path">Config file</label>
+          <input id="config-path" name="config" autocomplete="off" spellcheck="false" />
+          <label for="data-path">Data directory</label>
+          <input id="data-path" name="data" autocomplete="off" spellcheck="false" />
         </div>
-      </header>
-
-      <section class="panel" aria-labelledby="node-status-heading">
-        <h2 id="node-status-heading">Node Status</h2>
-        <dl id="status" class="readout"></dl>
+        <div class="action-row">
+          <button type="button" id="check-button">Check setup</button>
+          <button type="button" id="start-button" disabled>Start</button>
+          <button type="button" id="stop-button" disabled>Stop</button>
+        </div>
+        <p id="setup-error" class="error" role="alert" hidden></p>
+        <p id="setup-summary" class="summary"></p>
       </section>
 
-      <section class="panel" aria-labelledby="validator-heading">
-        <h2 id="validator-heading">Validator Mode</h2>
-        <label class="toggle-switch">
-          <input type="checkbox" id="validator-toggle" disabled />
-          <span class="toggle-slider"></span>
-          <span>Run as a validator. There is no maximum. A 50,000 KUNA self-stake is required.</span>
-        </label>
-        <p id="validator-status" class="muted" hidden>
-          <span id="validator-stake-value">0</span> KUNA stake
-          <span id="validator-shortfall" hidden>(<span id="validator-shortfall-value">0</span> KUNA shortfall)</span>
+      <section class="panel" aria-labelledby="process-heading">
+        <h2 id="process-heading">Process</h2>
+        <p class="note">Process running is not the same as RPC reachable, healthy, or synchronized.</p>
+        <dl id="process-readout" class="readout"></dl>
+      </section>
+
+      <section class="panel" aria-labelledby="monitor-heading">
+        <h2 id="monitor-heading">Monitor</h2>
+        <p class="note">
+          Read-only loopback <code>/health</code> and <code>kovanica_syncStatus</code>.
+          Missing data stays unknown. catchingUp false is not a synced claim.
         </p>
-        <button id="stake-button" disabled class="stake-btn">
-          Stake (add missing KUNA)
-        </button>
+        <dl id="monitor-readout" class="readout"></dl>
       </section>
 
       <section class="panel" aria-labelledby="logs-heading">
-        <h2 id="logs-heading">Logs (last 200 lines)</h2>
-        <div id="log-viewer" class="log-viewer"></div>
-      </section>
-
-      <section class="panel" aria-labelledby="actions-heading">
-        <h2 id="actions-heading">Actions</h2>
-        <div class="action-row">
-          <button id="start-button" class="primary-btn">Start</button>
-          <button id="stop-button" disabled>Stop</button>
-        </div>
-        <p id="keep-running-checkbox">
-          <input type="checkbox" id="keep-running" />
-          <label for="keep-running">Keep running after close</label>
-        </p>
+        <h2 id="logs-heading">Logs</h2>
+        <div id="log-viewer" class="log-viewer" tabindex="0" role="log" aria-label="Node logs, last 200 lines"></div>
       </section>
     </main>
-
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
