@@ -674,3 +674,144 @@ test("keyboard start and stop follow the authoritative process and do not duplic
   assert.equal(world.nodes.get("setup-error")!.hidden, true);
   world.dispose();
 });
+
+test("a pre-restart monitor cannot replace fresh post-restart data", async () => {
+  const world = harness();
+  await boot(world);
+  const tuple = fillPaths(world);
+  world.nodes.get("check-button")!.press("Enter");
+  world.take("inspect_setup").resolve(checked(tuple));
+  await world.flush();
+  world.nodes.get("start-button")!.press("Enter");
+  world.take("node_start").resolve(snapshot({
+    state: "running",
+    statusSeq: 3,
+    monitorSeq: 2,
+    rpc: "unknown",
+    pid: 40,
+    logs: ["started pid 40"],
+  }));
+  await world.flush();
+  assert.equal(readout(world.nodes.get("monitor-readout")!).Freshness, "not observed");
+
+  world.timers.get([...world.timers.keys()][0])!();
+  world.take("node_status").resolve(snapshot({ state: "running", statusSeq: 3, monitorSeq: 2, pid: 40 }));
+  const firstRead = world.take("monitor_refresh");
+  firstRead.resolve(snapshot({
+    state: "running",
+    statusSeq: 3,
+    monitorSeq: 3,
+    rpc: "reachable",
+    lastSuccessAgeMs: 0,
+    height: "4",
+    catchingUp: "false",
+    pid: 40,
+  }));
+  await world.flush();
+  assert.equal(readout(world.nodes.get("monitor-readout")!)["Committed height"], "4");
+  assert.equal(readout(world.nodes.get("monitor-readout")!).Freshness, "current");
+
+  world.timers.get([...world.timers.keys()][0])!();
+  const staleStatus = world.take("node_status");
+  const staleRefresh = world.take("monitor_refresh");
+  world.nodes.get("stop-button")!.press("Enter");
+  world.take("node_stop").resolve(snapshot({
+    state: "exited",
+    statusSeq: 5,
+    monitorSeq: 4,
+    rpc: "unreachable",
+    detail: "owned process exited with code 0; monitor is not live",
+    heightKind: "unavailable",
+    logs: ["started pid 40", "exited code 0"],
+  }));
+  await world.flush();
+  staleStatus.resolve(snapshot({
+    state: "running",
+    statusSeq: 3,
+    monitorSeq: 8,
+    rpc: "reachable",
+    lastSuccessAgeMs: 0,
+    height: "9",
+    catchingUp: "false",
+    pid: 40,
+  }));
+  staleRefresh.resolve(snapshot({
+    state: "running",
+    statusSeq: 3,
+    monitorSeq: 9,
+    rpc: "reachable",
+    lastSuccessAgeMs: 0,
+    height: "9",
+    catchingUp: "false",
+    pid: 40,
+  }));
+  await world.flush();
+  assert.equal(readout(world.nodes.get("process-readout")!).Process, "exited");
+  assert.equal(readout(world.nodes.get("monitor-readout")!)["Committed height"], "unavailable");
+  assert.equal(readout(world.nodes.get("monitor-readout")!).Freshness, "unreachable");
+  assert.notEqual(readout(world.nodes.get("monitor-readout")!)["Committed height"], "0");
+
+  world.nodes.get("start-button")!.press("Enter");
+  world.take("node_start").resolve(snapshot({
+    state: "running",
+    statusSeq: 6,
+    monitorSeq: 5,
+    rpc: "unknown",
+    pid: 41,
+    logs: ["started pid 41"],
+  }));
+  await world.flush();
+  assert.equal(readout(world.nodes.get("process-readout")!).Process, "running");
+  assert.equal(readout(world.nodes.get("process-readout")!).PID, "41");
+  assert.equal(readout(world.nodes.get("monitor-readout")!).Freshness, "not observed");
+  assert.equal(readout(world.nodes.get("monitor-readout")!)["Committed height"], "unknown");
+  assert.notEqual(readout(world.nodes.get("monitor-readout")!)["Committed height"], "4");
+
+  world.timers.get([...world.timers.keys()][0])!();
+  const duringRestart = world.take("node_status");
+  const freshRead = world.take("monitor_refresh");
+  duringRestart.resolve(snapshot({
+    state: "exited",
+    statusSeq: 5,
+    monitorSeq: 4,
+    rpc: "unreachable",
+    detail: "owned process exited with code 0; monitor is not live",
+    heightKind: "unavailable",
+    pid: null,
+  }));
+  await world.flush();
+  assert.equal(readout(world.nodes.get("process-readout")!).Process, "running");
+  freshRead.resolve(snapshot({
+    state: "running",
+    statusSeq: 6,
+    monitorSeq: 7,
+    rpc: "reachable",
+    lastSuccessAgeMs: 0,
+    height: "12",
+    catchingUp: "true",
+    peerCount: "0",
+    pid: 41,
+  }));
+  await world.flush();
+  assert.equal(readout(world.nodes.get("monitor-readout")!)["Committed height"], "12");
+  assert.equal(readout(world.nodes.get("monitor-readout")!).Freshness, "current");
+  assert.equal(readout(world.nodes.get("monitor-readout")!)["Catching up"], "true");
+  assert.doesNotMatch(JSON.stringify(readout(world.nodes.get("monitor-readout")!)), /synced|recovered/i);
+
+  world.timers.get([...world.timers.keys()][0])!();
+  world.take("node_status").resolve(snapshot({ state: "running", statusSeq: 6, monitorSeq: 7, pid: 41 }));
+  world.take("monitor_refresh").resolve(snapshot({
+    state: "running",
+    statusSeq: 3,
+    monitorSeq: 10,
+    rpc: "reachable",
+    lastSuccessAgeMs: 0,
+    height: "4",
+    catchingUp: "false",
+    pid: 40,
+  }));
+  await world.flush();
+  assert.equal(readout(world.nodes.get("monitor-readout")!)["Committed height"], "12");
+  assert.equal(readout(world.nodes.get("process-readout")!).PID, "41");
+  world.dispose();
+});
