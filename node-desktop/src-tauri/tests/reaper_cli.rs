@@ -29,8 +29,17 @@ fn proc_start(pid: i32) -> Option<u64> {
     fields.nth(18)?.parse().ok()
 }
 
-fn alive(pid: u32) -> bool {
-    unsafe { libc::kill(pid as i32, 0) == 0 }
+fn proc_state(pid: u32) -> Option<char> {
+    let text = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let rest = text.rsplit_once(')')?.1;
+    rest.split_whitespace().next()?.chars().next()
+}
+
+/// A zombie has exited. `kill(pid, 0)` still succeeds until something reaps it,
+/// and the Debian CI container's pid 1 does not. A live bystander stays in a
+/// non-zombie state, so this does not hide a signal sent to the wrong pid.
+fn running(pid: u32) -> bool {
+    matches!(proc_state(pid), Some(state) if state != 'Z' && state != 'X')
 }
 
 struct KillPid(u32);
@@ -60,7 +69,7 @@ fn spawn_parent_child(binary: &Path, pid_file: &Path) -> (Child, i32) {
     loop {
         if let Ok(text) = fs::read_to_string(pid_file) {
             if let Ok(pid) = text.trim().parse::<i32>() {
-                if alive(pid as u32) {
+                if running(pid as u32) {
                     return (parent, pid);
                 }
             }
@@ -154,15 +163,15 @@ fn production_binary_reaper_stops_only_the_adopted_child() {
         stderr.contains("not adopting"),
         "unrelated group leader was adopted: {stderr}"
     );
-    assert!(alive(leader.id()));
-    assert!(alive(node as u32));
-    assert!(alive(by_pid));
+    assert!(running(leader.id()));
+    assert!(running(node as u32));
+    assert!(running(by_pid));
 
     let mut watcher = reaper(bin, parent_pid, parent_started, node, node_started);
     thread::sleep(Duration::from_millis(200));
     assert!(
-        alive(node as u32),
-        "reaper stopped the child while its parent was alive"
+        running(node as u32),
+        "reaper stopped the child while its parent was running"
     );
     unsafe {
         libc::kill(parent_pid, libc::SIGKILL);
@@ -177,9 +186,9 @@ fn production_binary_reaper_stops_only_the_adopted_child() {
     assert!(status.success(), "{status} {stderr}");
     assert!(stderr.contains("stop outcome Exited"), "{stderr}");
     assert!(!stderr.contains("stop outcome Killed"), "{stderr}");
-    assert!(!alive(node as u32), "adopted child survived parent death");
-    assert!(alive(by_pid), "bystander was signaled");
-    assert!(alive(leader.id()), "unrelated group leader was signaled");
+    assert!(!running(node as u32), "adopted child survived parent death");
+    assert!(running(by_pid), "bystander was signaled");
+    assert!(running(leader.id()), "unrelated group leader was signaled");
     let _ = bystander.kill();
     let _ = bystander.wait();
     let _ = leader.kill();
@@ -194,7 +203,10 @@ fn production_binary_reaper_stops_only_the_adopted_child() {
     let by_pid = bystander.id();
     let mut watcher = reaper(bin, parent_pid, parent_started, node, node_started);
     thread::sleep(Duration::from_millis(200));
-    assert!(alive(node as u32), "reaper stopped a stubborn child early");
+    assert!(
+        running(node as u32),
+        "reaper stopped a stubborn child early"
+    );
     unsafe {
         libc::kill(parent_pid, libc::SIGKILL);
     }
@@ -212,8 +224,8 @@ fn production_binary_reaper_stops_only_the_adopted_child() {
         elapsed < Duration::from_secs(15),
         "production reaper did not escalate after the grace: {elapsed:?}"
     );
-    assert!(!alive(node as u32));
-    assert!(alive(by_pid), "escalation killed a bystander");
+    assert!(!running(node as u32));
+    assert!(running(by_pid), "escalation killed a bystander");
     let _ = bystander.kill();
     let _ = bystander.wait();
 }

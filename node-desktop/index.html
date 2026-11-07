@@ -25,6 +25,17 @@
         <p class="note">
           Absolute paths only. The app does not search PATH, download a binary, or write a config.
         </p>
+        <p class="note">
+          This package is the supervisor and the read-only monitor. It does not include
+          <code>kovanica-node</code>, a genesis file, a key, or a chain database. Type the absolute
+          path of a node executable you already have, the absolute path of a config file you already
+          wrote, and the absolute data directory named in that file. Check setup accepts or refuses
+          those three paths. Start stays off until the check matches the paths still in the form.
+          This window does not search <code>PATH</code>, download or build a node, rewrite the config, or unset
+          <code>KOVANICA_*</code>. If any <code>KOVANICA_*</code> name is set in the environment that
+          launched this window, Check setup refuses and does not show the value. Unset those names
+          outside this app and leave the file as it is.
+        </p>
         <div class="fields">
           <label for="binary-path">Node executable</label>
           <input id="binary-path" name="binary" autocomplete="off" spellcheck="false" />
