@@ -9,10 +9,10 @@ use kovanica_node_desktop::monitor::fetch_monitor;
 use kovanica_node_desktop::policy::{check_setup, kovanica_env_names};
 use kovanica_node_desktop::session::{BeginPoll, Session, Snapshot, WindowClose};
 use kovanica_node_desktop::supervisor::{
-    arm_exit_hook, disarm_window_teardown, gdk_event_starts_teardown_for_window,
-    note_window_teardown, set_tracked_window_xid, should_suppress_x_error,
-    stop_owned_on_process_exit, tracked_window_xid, window_teardown_started, ProcessState,
-    XErrorEvent, XErrorHandler, STOP_GRACE,
+    arm_exit_hook, clear_gdk_dispatch, delete_event_targets_tracked, disarm_window_teardown,
+    dispatch_x_error, enable_parent_death_reaper, gdk_event_starts_teardown_for_window,
+    note_gdk_dispatch, note_window_teardown, run_parent_death_reaper_from_args,
+    set_tracked_window_xid, ProcessState, XErrorEvent, XErrorHandler, GDK_WINDOW_STATE, STOP_GRACE,
 };
 use tauri::Manager;
 use tauri::State;
@@ -63,17 +63,12 @@ fn write_stderr(msg: &str) {
     }
 }
 
-/// `GdkEventType` of the event currently inside `gtk_main_do_event`.
-static CURRENT_GDK_EVENT: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
-static LAST_WINDOW_STATE_CHANGED: std::sync::atomic::AtomicI32 =
-    std::sync::atomic::AtomicI32::new(0);
-static LAST_WINDOW_STATE_NEW: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+/// `GdkEventType` of the event currently inside `gtk_main_do_event` lives in
+/// the supervisor crate so tests call the same dispatch the handler uses.
 static TRACKED_GTK_WINDOW: std::sync::atomic::AtomicPtr<std::ffi::c_void> =
     std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
 static TRACKED_GDK_WINDOW: std::sync::atomic::AtomicPtr<std::ffi::c_void> =
     std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
-static TRACKED_TOPLEVEL_XID: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
 
 #[repr(C)]
 #[allow(dead_code)]
@@ -93,7 +88,7 @@ struct GdkEventWindowState {
     new_window_state: i32,
 }
 
-const GDK_WINDOW_STATE: i32 = 32;
+const GDK_WINDOW_TOPLEVEL: i32 = 1;
 
 unsafe extern "C" fn on_gdk_event(event: *mut std::ffi::c_void, _data: *mut std::ffi::c_void) {
     let kind = if event.is_null() {
@@ -101,7 +96,6 @@ unsafe extern "C" fn on_gdk_event(event: *mut std::ffi::c_void, _data: *mut std:
     } else {
         unsafe { *(event as *const i32) }
     };
-    CURRENT_GDK_EVENT.store(kind, std::sync::atomic::Ordering::SeqCst);
 
     let event_win = if event.is_null() {
         std::ptr::null_mut()
@@ -113,25 +107,24 @@ unsafe extern "C" fn on_gdk_event(event: *mut std::ffi::c_void, _data: *mut std:
         && TRACKED_GDK_WINDOW
             .load(std::sync::atomic::Ordering::SeqCst)
             .is_null()
-        && unsafe { gdk_window_get_window_type(event_win) } == 1
-    /* GDK_WINDOW_TOPLEVEL */
+        && unsafe { gdk_window_get_window_type(event_win) } == GDK_WINDOW_TOPLEVEL
     {
         TRACKED_GDK_WINDOW.store(event_win, std::sync::atomic::Ordering::SeqCst);
         let xid = unsafe { gdk_x11_window_get_xid(event_win) };
-        TRACKED_TOPLEVEL_XID.store(xid, std::sync::atomic::Ordering::SeqCst);
         set_tracked_window_xid(xid);
     }
 
     let tracked = TRACKED_GDK_WINDOW.load(std::sync::atomic::Ordering::SeqCst);
     let is_tracked = !tracked.is_null() && event_win == tracked;
 
+    let mut changed_mask = 0;
     let mut new_state = 0;
     if kind == GDK_WINDOW_STATE && !event.is_null() {
         let state = unsafe { &*(event as *const GdkEventWindowState) };
+        changed_mask = state.changed_mask;
         new_state = state.new_window_state;
-        LAST_WINDOW_STATE_CHANGED.store(state.changed_mask, std::sync::atomic::Ordering::SeqCst);
-        LAST_WINDOW_STATE_NEW.store(new_state, std::sync::atomic::Ordering::SeqCst);
     }
+    note_gdk_dispatch(kind, changed_mask, new_state);
 
     if gdk_event_starts_teardown_for_window(kind, new_state, is_tracked) {
         note_window_teardown();
@@ -140,55 +133,19 @@ unsafe extern "C" fn on_gdk_event(event: *mut std::ffi::c_void, _data: *mut std:
         ));
     }
     unsafe { gtk_main_do_event(event) };
+    clear_gdk_dispatch();
 }
 
 static PREVIOUS_X_ERROR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 unsafe extern "C" fn on_x_error(display: *mut std::ffi::c_void, event: *mut XErrorEvent) -> i32 {
-    let code = unsafe { (*event).error_code };
-    let resource_id = unsafe { (*event).resourceid };
-    let teardown = window_teardown_started();
-    let tracked_xid = tracked_window_xid();
-    if should_suppress_x_error(code, resource_id, teardown, tracked_xid) {
-        write_stderr(&format!("node x error {code} ignored during teardown\n"));
-        return 0;
-    }
-
-    // Teardown race: WebKitGTK hits BadDrawable (9) or BadWindow (3) on the tracked
-    // window drawable when the window manager unmaps/destroys it during close, before GTK
-    // dispatches delete-event. Suppress only this specific race on the tracked window so the
-    // clean shutdown path can run.
-    if (code == 3 || code == 9) && tracked_xid != 0 && resource_id == tracked_xid {
-        let gdk_event = CURRENT_GDK_EVENT.load(std::sync::atomic::Ordering::SeqCst);
-        let changed = LAST_WINDOW_STATE_CHANGED.load(std::sync::atomic::Ordering::SeqCst);
-        if gdk_event == GDK_WINDOW_STATE && (changed & 2) != 0 {
-            note_window_teardown();
-            write_stderr(&format!(
-                "node x error {code} ignored during close unmap race on tracked window\n"
-            ));
-            return 0;
-        }
-    }
-
-    if code == 3 || code == 9 {
-        let request = unsafe { (*event).request_code };
-        let gdk_event = CURRENT_GDK_EVENT.load(std::sync::atomic::Ordering::SeqCst);
-        let changed = LAST_WINDOW_STATE_CHANGED.load(std::sync::atomic::Ordering::SeqCst);
-        let new_state = LAST_WINDOW_STATE_NEW.load(std::sync::atomic::Ordering::SeqCst);
-        write_stderr(&format!(
-            "node x error {code} passed to toolkit teardown={teardown} request={request} gdk_event={gdk_event} window_changed={changed} window_new={new_state}\n"
-        ));
-    }
     let previous = PREVIOUS_X_ERROR.load(std::sync::atomic::Ordering::SeqCst);
-    if previous != 0 {
-        // GTK 3's error handler prints the error and calls _exit(1), skipping libc atexit.
-        // Clean up the owned child process now so unexpected GTK exits do not leak the child.
-        stop_owned_on_process_exit();
-        let previous: XErrorHandler = unsafe { std::mem::transmute(previous) };
-        return unsafe { previous(display, event) };
-    }
-    write_stderr(&format!("node x error {code} had no previous handler\n"));
-    0
+    let previous = if previous == 0 {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<usize, XErrorHandler>(previous) })
+    };
+    unsafe { dispatch_x_error(display, event, previous) }
 }
 
 unsafe extern "C" fn on_delete_event_emission(
@@ -203,7 +160,7 @@ unsafe extern "C" fn on_delete_event_emission(
     } else {
         std::ptr::null_mut()
     };
-    if tracked_widget.is_null() || emitting_widget == tracked_widget {
+    if delete_event_targets_tracked(tracked_widget, emitting_widget) {
         note_window_teardown();
         write_stderr("node teardown armed via delete-event\n");
     }
@@ -355,6 +312,10 @@ fn apply_close(state: &Session) -> WindowClose {
 }
 
 fn main() {
+    if let Some(code) = run_parent_death_reaper_from_args(std::env::args().skip(1)) {
+        std::process::exit(code);
+    }
+    enable_parent_death_reaper();
     let app = Session::new(STOP_GRACE);
     tauri::Builder::default()
         .manage(app)
@@ -376,7 +337,6 @@ fn main() {
                     if !gdk_win.is_null() {
                         TRACKED_GDK_WINDOW.store(gdk_win, std::sync::atomic::Ordering::SeqCst);
                         let xid = unsafe { gdk_x11_window_get_xid(gdk_win) };
-                        TRACKED_TOPLEVEL_XID.store(xid, std::sync::atomic::Ordering::SeqCst);
                         set_tracked_window_xid(xid);
                     }
                 }
