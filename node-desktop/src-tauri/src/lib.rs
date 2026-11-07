@@ -6,4 +6,5 @@
 pub mod monitor;
 pub mod policy;
 pub mod redact;
+pub mod session;
 pub mod supervisor;

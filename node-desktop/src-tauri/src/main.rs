@@ -3,38 +3,61 @@
 //! The webview cannot start a process except through these commands.
 //! There is no remote admin endpoint and no transaction submission.
 
-use std::sync::Mutex;
 use std::time::Instant;
 
-use kovanica_node_desktop::monitor::{fetch_monitor, MonitorView, PollGate};
-use kovanica_node_desktop::policy::{
-    check_setup, kovanica_env_names, CheckedSetup, REVIEWED_NODE_SOURCE,
-};
-use kovanica_node_desktop::supervisor::{ProcessState, ProcessStatus, Supervisor, STOP_GRACE};
-use serde::Serialize;
+use kovanica_node_desktop::monitor::fetch_monitor;
+use kovanica_node_desktop::policy::{check_setup, kovanica_env_names};
+use kovanica_node_desktop::session::{BeginPoll, Session, Snapshot, WindowClose};
+use kovanica_node_desktop::supervisor::{arm_exit_hook, ProcessState, STOP_GRACE};
 use tauri::Manager;
 use tauri::State;
 
-struct AppState {
-    supervisor: Supervisor,
-    monitor: Mutex<MonitorRuntime>,
-    setup: Mutex<Option<CheckedSetup>>,
+/// BadDrawable while WebKit tears down a window on Xvfb. The default GDK
+/// handler can `exit` before `CloseRequested`. Ignore only that error so the
+/// owned-child stop can run. Other errors still go to the previous handler.
+#[repr(C)]
+#[allow(dead_code)]
+struct XErrorEvent {
+    _type: i32,
+    display: *mut std::ffi::c_void,
+    resourceid: usize,
+    serial: usize,
+    error_code: u8,
+    request_code: u8,
+    minor_code: u8,
 }
 
-struct MonitorRuntime {
-    gate: PollGate,
-    rpc_http: Option<String>,
+type XErrorHandler = unsafe extern "C" fn(*mut std::ffi::c_void, *mut XErrorEvent) -> i32;
+
+#[link(name = "X11")]
+extern "C" {
+    fn XSetErrorHandler(handler: Option<XErrorHandler>) -> Option<XErrorHandler>;
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Snapshot {
-    process: ProcessStatus,
-    monitor: MonitorView,
-    setup: Option<CheckedSetup>,
-    reviewed_node_source: &'static str,
-    stop_grace_secs: u64,
-    exit_stops_owned_child: bool,
+static mut PREVIOUS_X_ERROR: Option<XErrorHandler> = None;
+
+unsafe extern "C" fn ignore_teardown_drawable(
+    display: *mut std::ffi::c_void,
+    event: *mut XErrorEvent,
+) -> i32 {
+    let code = unsafe { (*event).error_code };
+    // 3 BadWindow, 9 BadDrawable. Both show up while the webview window is destroyed.
+    if code == 3 || code == 9 {
+        return 0;
+    }
+    unsafe {
+        if let Some(previous) = PREVIOUS_X_ERROR {
+            return previous(display, event);
+        }
+    }
+    0
+}
+
+fn install_x_error_guard() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| unsafe {
+        PREVIOUS_X_ERROR = XSetErrorHandler(Some(ignore_teardown_drawable));
+    });
 }
 
 fn current_kovanica_env() -> Vec<String> {
@@ -43,134 +66,97 @@ fn current_kovanica_env() -> Vec<String> {
     kovanica_env_names(refs)
 }
 
-fn stop_owned(state: &AppState) -> Result<(), String> {
-    let result = state.supervisor.stop();
-    let mut monitor = state.monitor.lock().expect("monitor lock");
-    monitor.gate.bump_generation(Instant::now());
-    monitor.rpc_http = None;
-    result
-}
-
-fn snapshot(state: &AppState) -> Snapshot {
-    let process = state.supervisor.status();
-    let monitor = state
-        .monitor
-        .lock()
-        .expect("monitor lock")
-        .gate
-        .last
-        .clone();
-    Snapshot {
-        process,
-        monitor,
-        setup: state.setup.lock().expect("setup lock").clone(),
-        reviewed_node_source: REVIEWED_NODE_SOURCE,
-        stop_grace_secs: STOP_GRACE.as_secs(),
-        exit_stops_owned_child: true,
-    }
+fn paths<'a>(
+    binary: &'a str,
+    config_path: &'a str,
+    data_dir: &'a str,
+) -> (
+    &'a std::path::Path,
+    &'a std::path::Path,
+    &'a std::path::Path,
+) {
+    (
+        std::path::Path::new(binary),
+        std::path::Path::new(config_path),
+        std::path::Path::new(data_dir),
+    )
 }
 
 #[tauri::command]
 fn inspect_setup(
-    state: State<'_, AppState>,
+    state: State<'_, Session>,
     binary: String,
     config_path: String,
     data_dir: String,
-) -> Result<CheckedSetup, String> {
-    let checked = check_setup(
-        std::path::Path::new(&binary),
-        std::path::Path::new(&config_path),
-        std::path::Path::new(&data_dir),
-        &current_kovanica_env(),
-    )?;
-    *state.setup.lock().expect("setup lock") = Some(checked.clone());
+) -> Result<kovanica_node_desktop::policy::CheckedSetup, String> {
+    let (binary, config_path, data_dir) = paths(&binary, &config_path, &data_dir);
+    let checked = check_setup(binary, config_path, data_dir, &current_kovanica_env())?;
+    state.store_setup(checked.clone());
     Ok(checked)
 }
 
 #[tauri::command]
 fn node_start(
-    state: State<'_, AppState>,
+    state: State<'_, Session>,
     binary: String,
     config_path: String,
     data_dir: String,
 ) -> Result<Snapshot, String> {
-    let checked = check_setup(
-        std::path::Path::new(&binary),
-        std::path::Path::new(&config_path),
-        std::path::Path::new(&data_dir),
-        &current_kovanica_env(),
-    )?;
+    let (binary, config_path, data_dir) = paths(&binary, &config_path, &data_dir);
+    let checked = check_setup(binary, config_path, data_dir, &current_kovanica_env())?;
     state.supervisor.start(
         std::path::Path::new(&checked.binary),
         std::path::Path::new(&checked.config_path),
     )?;
-    {
-        let mut monitor = state.monitor.lock().expect("monitor lock");
-        monitor.gate.bump_generation(Instant::now());
-        monitor.rpc_http = Some(checked.rpc_http.clone());
-    }
-    *state.setup.lock().expect("setup lock") = Some(checked);
-    Ok(snapshot(&state))
+    state.attach_checked(checked);
+    Ok(state.snapshot())
 }
 
 #[tauri::command]
-fn node_stop(state: State<'_, AppState>) -> Result<Snapshot, String> {
-    stop_owned(&state)?;
-    Ok(snapshot(&state))
+fn node_stop(state: State<'_, Session>) -> Result<Snapshot, String> {
+    state.stop_owned()?;
+    Ok(state.snapshot())
 }
 
 #[tauri::command]
-fn node_status(state: State<'_, AppState>) -> Snapshot {
-    snapshot(&state)
+fn node_status(state: State<'_, Session>) -> Snapshot {
+    state.snapshot()
 }
 
 #[tauri::command]
-fn set_monitor_paused(state: State<'_, AppState>, paused: bool) {
-    state.monitor.lock().expect("monitor lock").gate.paused = paused;
+fn set_monitor_paused(state: State<'_, Session>, paused: bool) {
+    state.set_paused(paused);
 }
 
 #[tauri::command]
-async fn monitor_refresh(state: State<'_, AppState>) -> Result<Snapshot, String> {
-    if state.supervisor.status().state != ProcessState::Running {
-        return Ok(snapshot(&state));
-    }
-    let (generation, rpc_http) = {
-        let mut monitor = state.monitor.lock().expect("monitor lock");
-        let now = Instant::now();
-        match monitor.gate.begin(now) {
-            Some(generation) => (generation, monitor.rpc_http.clone()),
-            None => return Ok(snapshot(&state)),
-        }
-    };
-    let Some(rpc_http) = rpc_http else {
-        let mut monitor = state.monitor.lock().expect("monitor lock");
-        monitor
-            .gate
-            .finish_err(generation, Instant::now(), "no loopback endpoint".into());
-        return Ok(snapshot(&state));
-    };
-    match fetch_monitor(&rpc_http).await {
-        Ok(view) => {
-            let mut monitor = state.monitor.lock().expect("monitor lock");
-            monitor.gate.finish_ok(generation, Instant::now(), view);
-        }
-        Err(err) => {
-            let mut monitor = state.monitor.lock().expect("monitor lock");
-            monitor.gate.finish_err(generation, Instant::now(), err);
+async fn monitor_refresh(state: State<'_, Session>) -> Result<Snapshot, String> {
+    match state.begin_monitor_poll(Instant::now()) {
+        BeginPoll::Idle(snapshot) => Ok(*snapshot),
+        BeginPoll::Fetch {
+            generation,
+            rpc_http,
+        } => {
+            match fetch_monitor(&rpc_http).await {
+                Ok(view) => state.finish_monitor_ok(generation, Instant::now(), view),
+                Err(err) => state.finish_monitor_err(generation, Instant::now(), err),
+            }
+            Ok(state.snapshot())
         }
     }
-    Ok(snapshot(&state))
+}
+
+/// Stop the owned child. Stay open when that stop is not confirmed.
+fn apply_close(state: &Session) -> WindowClose {
+    eprintln!("node close requested");
+    let decision = state.close_window();
+    if let WindowClose::StayOpen { error } = &decision {
+        eprintln!("node stop was not confirmed; keeping the window open: {error}");
+    }
+    decision
 }
 
 fn main() {
-    let app = AppState {
-        supervisor: Supervisor::new(STOP_GRACE),
-        monitor: Mutex::new(MonitorRuntime {
-            gate: PollGate::new(Instant::now()),
-            rpc_http: None,
-        }),
-        setup: Mutex::new(None),
-    };
+    let app = Session::new(STOP_GRACE);
     tauri::Builder::default()
         .manage(app)
         .invoke_handler(tauri::generate_handler![
@@ -184,11 +170,35 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building Kovanica Node")
         .run(|app, event| {
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                if let Some(state) = app.try_state::<AppState>() {
-                    // Same path as the Stop button: only the child this process spawned.
-                    let _ = stop_owned(state.inner());
+            // After GTK has registered its own handlers, so this one runs first.
+            arm_exit_hook();
+            install_x_error_guard();
+            match event {
+                tauri::RunEvent::WindowEvent {
+                    event: tauri::WindowEvent::CloseRequested { api, .. },
+                    ..
+                } => {
+                    if let Some(state) = app.try_state::<Session>() {
+                        if let WindowClose::StayOpen { .. } = apply_close(state.inner()) {
+                            api.prevent_close();
+                        }
+                    }
                 }
+                tauri::RunEvent::ExitRequested { api, .. } => {
+                    if let Some(state) = app.try_state::<Session>() {
+                        // If the window close already confirmed the stop, this returns Ok.
+                        // If it did not, do not leave the process while the child may be alive.
+                        if matches!(
+                            state.inner().supervisor.status().state,
+                            ProcessState::Running | ProcessState::Starting | ProcessState::Stopping
+                        ) {
+                            if let WindowClose::StayOpen { .. } = apply_close(state.inner()) {
+                                api.prevent_exit();
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         });
 }

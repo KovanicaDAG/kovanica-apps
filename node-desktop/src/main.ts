@@ -96,7 +96,9 @@ function renderProcess(snapshot: Snapshot): void {
     ["Last error", process.lastError ?? "none"],
     ["Reviewed node source", snapshot.reviewedNodeSource],
     ["Stop grace", `${snapshot.stopGraceSecs}s SIGTERM, then SIGKILL`],
-    ["On window close", snapshot.exitStopsOwnedChild ? "stops the node this app started" : "unknown"],
+    ["On window close", snapshot.exitStopsOwnedChild
+      ? "same Stop; stays open if the child is not confirmed exited"
+      : "unknown"],
   ]);
   logViewer.replaceChildren();
   for (const line of process.logs) {

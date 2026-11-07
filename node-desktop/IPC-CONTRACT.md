@@ -10,7 +10,7 @@ There is no wallet, stake, mining, or key command.
 |---|---|---|
 | `inspect_setup` | `binary`, `configPath`, `dataDir` | `CheckedSetup` or an error. Does not start a process or write the config. |
 | `node_start` | same three paths | Re-checks the setup, spawns `<binary> --config <config>`, returns a snapshot. |
-| `node_stop` | none | SIGTERM, 10s, SIGKILL, only for the owned child. Returns a snapshot. |
+| `node_stop` | none | SIGTERM, grace, SIGKILL, only for the owned child. Returns a snapshot after the child is reaped. On signal or wait failure the error string is returned, state stays `stopping`, and the pid is kept. |
 | `node_status` | none | Last snapshot. Does not call RPC. |
 | `monitor_refresh` | none | One non-overlapping loopback read when the owned process is running and the poll gate allows it. |
 | `set_monitor_paused` | `paused` | Hides the window from starting a new read. |
@@ -34,4 +34,9 @@ Sync field names in the snapshot are camelCase JSON of the Rust view (`committed
 
 ## Exit
 
-`RunEvent::ExitRequested` calls the same stop function as `node_stop`.
+`WindowEvent::CloseRequested` and `RunEvent::ExitRequested` call the same `stop_owned` path as `node_stop`.
+
+`Ok` means the child was reaped (or there was no owned child). The window may close.
+`Err` means the child was not confirmed exited. The pid stays owned, the state stays `stopping`, `CloseRequested` calls `prevent_close`, and `ExitRequested` calls `prevent_exit`. The app does not report that cleanup succeeded.
+
+On this WebKitGTK build, destroying the window can raise `BadDrawable` and the process can `exit` before those events run. An `atexit` hook then signals the owned process group only, after comparing `/proc/<pid>/stat` start time. It does not clear a failure into `exited` and it does not pick a pid by name.

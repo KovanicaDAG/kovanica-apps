@@ -39,15 +39,16 @@ There is no `--data-dir` flag on that CLI. `data_dir` is a field in the config. 
 
 P2P `listen_addr` is shown and left as written. This milestone does not rewrite it.
 
-The executable SHA-256 shown after Check setup identifies the file bytes. It does not prove who built them or that they match the reviewed source revision. This change did not build or hash a `kovanica-node` binary. Committed-height recovery against a real chain database was **not tested**.
+The executable SHA-256 shown after Check setup identifies the file bytes. It does not prove who built them. A debug `kovanica-node` was built from reviewed source `74045cf3e27a70569c32af35aec24ada5dd9ff79` outside this repo and was not committed. Its SHA-256 is `93767a3f0d272877a4cafb62138960990f5dde8d3d77598605012907543fca73`. Package version in that tree is `0.0.31`. The binary has no `--version` flag. A non-validator, non-mining chain-1337 loopback process reports `committedHeight` 0 before and after restart on the same data directory. Nonzero committed-state recovery was **not tested**: this app will not start a validator or a miner, and that node does not certify a leader without a seal quorum. `catchingUp: false` at height 0 is not a synced claim.
 
 ## Process control
 
 - Start and Stop are explicit.
 - A second Start is refused while the owned child is starting, running, or stopping.
-- Stop sends `SIGTERM` to the process group created for that child (`setsid` in the child), waits 10 seconds, then `SIGKILL`.
-- The app never signals by executable name and never adopts another pid.
-- Closing the window uses the same stop path. The node is not left running.
+- Stop sends `SIGTERM` to the process group created for that child (`setsid` in the child), waits 10 seconds, then `SIGKILL`, then waits 2 seconds for the child to be reaped.
+- `Exited` is recorded only after `wait` confirms it. If the signal fails or the child is still alive, the state stays `stopping`, the pid is kept, and Stop can be retried. Nothing is killed by name.
+- Closing the window uses that same stop. If it is confirmed, the window closes. If it is not, the window stays open.
+- If the toolkit calls `exit` during teardown before that stop runs, an exit hook still signals only the owned process group. It checks `/proc` start time first, so a reused pid is not signaled. A bystander is not a target.
 - Logs keep the last 200 lines. Lines that look like secrets are replaced with `[redacted]`. The config file is not copied into the log.
 
 ## Monitor
@@ -83,7 +84,7 @@ The default Cargo feature is `gui`, which links Tauri and therefore GTK/WebKit. 
 cargo build --manifest-path src-tauri/Cargo.toml --features gui
 ```
 
-That needs `pkg-config` and the GTK/WebKit development packages. This sandbox did not have them, so the Linux package was not produced here.
+That needs `pkg-config` and the GTK/WebKit development packages (`libgtk-3-dev`, `libwebkit2gtk-4.1-dev`, and their dependencies). On this Debian 12 check those were GTK 3.24.38, glib 2.74.6, and WebKitGTK 4.1 2.50.6. `cargo build --manifest-path src-tauri/Cargo.toml --locked --features gui --bins` produced the debug binary. A `.deb` package was not built. The window was exercised on Xvfb `:99`, not on a physical display.
 
 `console-desktop` still path-depends on `../../../crates` and is not fixed here.
 

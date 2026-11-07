@@ -140,6 +140,10 @@ impl MonitorView {
 }
 
 impl HealthView {
+    pub fn unavailable() -> Self {
+        Self::blank(true)
+    }
+
     fn blank(failed: bool) -> Self {
         let field = if failed {
             Field::unavailable()
@@ -159,6 +163,10 @@ impl HealthView {
 }
 
 impl SyncView {
+    pub fn unavailable() -> Self {
+        Self::blank(true)
+    }
+
     fn blank(failed: bool) -> Self {
         let field = if failed {
             Field::unavailable()
