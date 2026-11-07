@@ -302,6 +302,7 @@ pub struct PollGate {
     pub next_allowed: Instant,
     pub last_success: Option<Instant>,
     pub last: MonitorView,
+    pub view_seq: u64,
 }
 
 impl PollGate {
@@ -314,6 +315,7 @@ impl PollGate {
             next_allowed: now,
             last_success: None,
             last: MonitorView::unknown(),
+            view_seq: 1,
         }
     }
 
@@ -336,6 +338,7 @@ impl PollGate {
         self.last = view;
         self.last.stale = false;
         self.last.last_success_age_ms = Some(0);
+        self.view_seq = self.view_seq.wrapping_add(1);
     }
 
     pub fn finish_err(&mut self, started: u64, now: Instant, detail: String) {
@@ -355,6 +358,7 @@ impl PollGate {
             self.last.health = HealthView::blank(true);
             self.last.sync = SyncView::blank(true);
         }
+        self.view_seq = self.view_seq.wrapping_add(1);
     }
 
     pub fn bump_generation(&mut self, now: Instant) {
@@ -364,6 +368,7 @@ impl PollGate {
         self.next_allowed = now;
         self.last_success = None;
         self.last = MonitorView::unknown();
+        self.view_seq = self.view_seq.wrapping_add(1);
     }
 }
 
@@ -524,22 +529,35 @@ mod tests {
         assert!(!accept_generation(3, 4));
 
         let mut gate = PollGate::new(now);
+        assert_eq!(gate.view_seq, 1);
         let started = gate.begin(now).unwrap();
         assert!(gate.begin(now).is_none(), "in-flight poll must not overlap");
         gate.finish_err(started, now, "down".into());
         assert_eq!(gate.last.rpc, RpcReach::Unreachable);
         assert!(!gate.last.stale);
+        assert!(gate.last.last_success_age_ms.is_none());
+        assert_eq!(gate.view_seq, 2);
+        assert_ne!(gate.last.sync.committed_height, Field::value("0"));
         let again = gate.begin(now + next_wait(1)).unwrap();
         gate.finish_ok(again, now + next_wait(1), MonitorView::unknown());
+        assert_eq!(gate.view_seq, 3);
+        assert_eq!(gate.last.last_success_age_ms, Some(0));
+        assert!(!gate.last.stale);
         gate.last.rpc = RpcReach::Reachable;
         let stale_start = gate.begin(now + next_wait(1) + next_wait(0)).unwrap();
         gate.bump_generation(now);
+        let bumped = gate.view_seq;
+        assert!(bumped > 3);
         gate.finish_ok(stale_start, now, {
             let mut view = MonitorView::unknown();
             view.rpc = RpcReach::Reachable;
             view.sync.committed_height = Field::value("99");
             view
         });
+        assert_eq!(
+            gate.view_seq, bumped,
+            "stale finish must not advance the view"
+        );
         assert_eq!(gate.last.sync.committed_height, Field::unknown());
         assert_ne!(gate.last.sync.committed_height, Field::value("99"));
     }

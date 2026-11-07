@@ -28,6 +28,8 @@ pub struct Session {
 pub struct Snapshot {
     pub process: ProcessStatus,
     pub monitor: MonitorView,
+    /// Copy of the poll gate's view sequence at the time this snapshot was taken.
+    pub monitor_seq: u64,
     pub setup: Option<CheckedSetup>,
     pub reviewed_node_source: &'static str,
     pub stop_grace_secs: u64,
@@ -85,7 +87,10 @@ impl Session {
 
     pub fn snapshot(&self) -> Snapshot {
         let process = self.supervisor.status();
-        let mut monitor = self.monitor.lock().expect("monitor lock").gate.last.clone();
+        let (mut monitor, monitor_seq) = {
+            let runtime = self.monitor.lock().expect("monitor lock");
+            (runtime.gate.last.clone(), runtime.gate.view_seq)
+        };
         // A reaped child must not keep the last healthy or not-catching-up read.
         if process.state == ProcessState::Exited {
             monitor.rpc = crate::monitor::RpcReach::Unreachable;
@@ -103,6 +108,7 @@ impl Session {
         Snapshot {
             process,
             monitor,
+            monitor_seq,
             setup: self.setup.lock().expect("setup lock").clone(),
             reviewed_node_source: REVIEWED_NODE_SOURCE,
             stop_grace_secs: self.supervisor.grace().as_secs(),
@@ -361,6 +367,61 @@ mod tests {
         assert_ne!(dead.monitor.sync.catching_up, Field::value("false"));
         assert_ne!(dead.monitor.sync.committed_height, Field::value("0"));
         assert!(dead.monitor.detail.unwrap().contains("not live"));
+        assert!(dead.process.status_seq > 1);
+    }
+
+    #[test]
+    fn sequences_advance_on_lifecycle_and_a_stale_finish_does_not() {
+        let (_tmp, session) = running_session();
+        let running_seq = session.snapshot().process.status_seq;
+        assert!(
+            running_seq >= 2,
+            "start must publish a newer process sequence"
+        );
+        session.attach_checked(sample_setup());
+        let now = Instant::now();
+        let BeginPoll::Fetch { generation, .. } = session.begin_monitor_poll(now) else {
+            panic!("expected a fetch");
+        };
+        let during = session.snapshot().monitor_seq;
+        session.finish_monitor_err(generation, now, "down".into());
+        let failed = session.snapshot();
+        assert!(failed.monitor_seq > during);
+        assert_eq!(failed.monitor.rpc, RpcReach::Unreachable);
+        assert!(failed.monitor.last_success_age_ms.is_none());
+        assert!(!failed.monitor.stale);
+        assert_ne!(failed.monitor.sync.committed_height, Field::value("0"));
+
+        let later = now + crate::monitor::next_wait(1);
+        let BeginPoll::Fetch {
+            generation: ok_gen, ..
+        } = session.begin_monitor_poll(later)
+        else {
+            panic!("expected a fetch after backoff");
+        };
+        let mut view = MonitorView::unknown();
+        view.rpc = RpcReach::Reachable;
+        view.sync.committed_height = Field::value("4");
+        session.finish_monitor_ok(ok_gen, later, view);
+        let live = session.snapshot();
+        assert!(live.monitor_seq > failed.monitor_seq);
+        assert_eq!(live.monitor.last_success_age_ms, Some(0));
+        assert!(!live.monitor.stale);
+
+        session.stop_owned().unwrap();
+        let dead = session.snapshot();
+        assert!(dead.process.status_seq > running_seq);
+        assert_eq!(dead.process.state, ProcessState::Exited);
+        let dead_monitor = dead.monitor_seq;
+        let mut stale = MonitorView::unknown();
+        stale.rpc = RpcReach::Reachable;
+        stale.sync.committed_height = Field::value("99");
+        session.finish_monitor_ok(ok_gen, Instant::now(), stale);
+        let after = session.snapshot();
+        assert_eq!(after.monitor_seq, dead_monitor);
+        assert_ne!(after.monitor.sync.committed_height, Field::value("99"));
+        assert_ne!(after.monitor.sync.committed_height, Field::value("0"));
+        assert_eq!(after.process.status_seq, dead.process.status_seq);
     }
 
     fn sample_setup() -> CheckedSetup {

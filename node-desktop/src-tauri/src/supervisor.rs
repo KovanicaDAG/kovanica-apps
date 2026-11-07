@@ -289,6 +289,9 @@ pub struct ProcessStatus {
     pub exit_code: Option<i32>,
     pub last_error: Option<String>,
     pub logs: Vec<String>,
+    /// Increases on each owned-process observation the window may render.
+    /// A slower command can finish later; the UI keeps the higher sequence.
+    pub status_seq: u64,
 }
 
 struct Inner {
@@ -299,6 +302,13 @@ struct Inner {
     exit_code: Option<i32>,
     last_error: Option<String>,
     generation: u64,
+    status_seq: u64,
+}
+
+impl Inner {
+    fn observe(&mut self) {
+        self.status_seq = self.status_seq.wrapping_add(1);
+    }
 }
 
 pub struct Supervisor {
@@ -325,6 +335,7 @@ impl Supervisor {
                 exit_code: None,
                 last_error: None,
                 generation: 1,
+                status_seq: 1,
             }),
             logs: Arc::new(Mutex::new(VecDeque::new())),
             grace,
@@ -357,6 +368,7 @@ impl Supervisor {
                 .iter()
                 .cloned()
                 .collect(),
+            status_seq: inner.status_seq,
         }
     }
 
@@ -395,6 +407,7 @@ impl Supervisor {
             let mut inner = self.lock();
             inner.state = ProcessState::Stopped;
             inner.last_error = Some(format!("could not start {}: {err}", binary.display()));
+            inner.observe();
             inner.last_error.clone().unwrap()
         })?;
         let pid = child.id();
@@ -414,6 +427,7 @@ impl Supervisor {
             inner.exit_code = None;
             inner.last_error = None;
             inner.generation = inner.generation.wrapping_add(1);
+            inner.observe();
         }
         if let Err(err) = publish_owned(pid) {
             let stop_result = self.stop();
@@ -458,6 +472,7 @@ impl Supervisor {
                     "stopping without a pid. Ownership was not cleared and it was not reported as exited."
                         .into(),
                 );
+                inner.observe();
                 return Err(inner.last_error.clone().unwrap());
             };
             if !inner.owns_group || pid == 0 || inner.child.is_none() {
@@ -466,9 +481,11 @@ impl Supervisor {
                     "refusing to signal a process this app does not own. It was not reported as exited."
                         .into(),
                 );
+                inner.observe();
                 return Err(inner.last_error.clone().unwrap());
             }
             inner.state = ProcessState::Stopping;
+            inner.observe();
             pid
         };
 
@@ -545,6 +562,7 @@ impl Supervisor {
         inner.last_error = Some(format!(
             "owned pid {pid} was not confirmed exited ({detail}). Ownership kept; retry Stop."
         ));
+        inner.observe();
         Err(inner.last_error.clone().unwrap())
     }
 
@@ -594,6 +612,7 @@ impl Supervisor {
                 inner.last_error = None;
                 inner.child = None;
                 inner.state = ProcessState::Exited;
+                inner.observe();
                 clear_owned_publication();
                 drop(inner);
                 disarm_parent_death_reaper();
@@ -612,6 +631,7 @@ impl Supervisor {
                 inner.last_error = Some(format!(
                     "could not wait for the child: {err}. Ownership kept; it was not reported as exited."
                 ));
+                inner.observe();
             }
         }
     }
