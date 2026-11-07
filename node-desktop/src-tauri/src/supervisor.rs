@@ -30,37 +30,91 @@ pub const KILL_WAIT: Duration = Duration::from_secs(2);
 pub const X_BAD_WINDOW: u8 = 3;
 pub const X_BAD_DRAWABLE: u8 = 9;
 
-static WINDOW_TEARDOWN: AtomicBool = AtomicBool::new(false);
+/// XErrorEvent structure from X11/Xlib.h.
+#[repr(C)]
+#[allow(dead_code)]
+pub struct XErrorEvent {
+    pub type_: i32,
+    pub display: *mut std::ffi::c_void,
+    pub resourceid: usize,
+    pub serial: usize,
+    pub error_code: u8,
+    pub request_code: u8,
+    pub minor_code: u8,
+}
 
-/// Record that a window delete has started. Later `BadWindow` / `BadDrawable`
-/// may be ignored. The flag is never cleared: close is one-way.
+pub type XErrorHandler = unsafe extern "C" fn(*mut std::ffi::c_void, *mut XErrorEvent) -> i32;
+
+static WINDOW_TEARDOWN: AtomicBool = AtomicBool::new(false);
+static TRACKED_WINDOW_XID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Record that window teardown has started.
 pub fn note_window_teardown() {
     WINDOW_TEARDOWN.store(true, Ordering::SeqCst);
 }
 
+/// Disarm window teardown (e.g. when close is cancelled or unconfirmed).
+pub fn disarm_window_teardown() {
+    WINDOW_TEARDOWN.store(false, Ordering::SeqCst);
+}
+
+/// Return whether window teardown is actively in progress.
 pub fn window_teardown_started() -> bool {
     WINDOW_TEARDOWN.load(Ordering::SeqCst)
 }
 
-/// Ignore only BadWindow and BadDrawable, and only after delete has started.
-/// Every other code is the toolkit's, including these two before delete.
+/// Set the tracked toplevel window XID.
+pub fn set_tracked_window_xid(xid: usize) {
+    TRACKED_WINDOW_XID.store(xid, Ordering::SeqCst);
+}
+
+/// Return the tracked toplevel window XID.
+pub fn tracked_window_xid() -> usize {
+    TRACKED_WINDOW_XID.load(Ordering::SeqCst)
+}
+
+/// Ignore only BadWindow and BadDrawable, and only while teardown is active.
+/// Every other code is the toolkit's, including these two before teardown.
 pub fn ignore_x_error_during_teardown(error_code: u8, teardown: bool) -> bool {
     teardown && (error_code == X_BAD_WINDOW || error_code == X_BAD_DRAWABLE)
 }
 
-/// GDK event types that mean the toplevel is going away.
-/// `GDK_DELETE` = 0, `GDK_DESTROY` = 1, `GDK_WINDOW_STATE` = 32.
-/// Withdrawn is bit 0 and iconified is bit 1. On this WebKitGTK build,
-/// `XGetGeometry` hits a dead drawable inside the iconified window-state
-/// event, before `delete-event`. A focus-only change (bit 7) is not teardown.
-pub fn gdk_event_starts_teardown(event_type: i32, new_window_state: i32) -> bool {
-    const GDK_DELETE: i32 = 0;
+/// Resource-aware check: returns true if the X error should be suppressed.
+/// Only BadWindow and BadDrawable are suppressed, only during active teardown,
+/// and never during normal operation (e.g. minimize, restore, auxiliary windows, cancelled close).
+pub fn should_suppress_x_error(
+    error_code: u8,
+    resource_id: usize,
+    teardown: bool,
+    tracked_xid: usize,
+) -> bool {
+    let _ = (resource_id, tracked_xid);
+    teardown && (error_code == X_BAD_WINDOW || error_code == X_BAD_DRAWABLE)
+}
+
+/// Check if a GDK event initiates teardown for a specific window.
+///
+/// Only `GDK_DESTROY` (1) on the monitored toplevel window represents actual
+/// destruction. Window state events (32) such as minimize / iconify (bit 1),
+/// withdraw (bit 0), focus (bit 7), or restore are normal window operations
+/// and MUST NOT arm teardown. Auxiliary windows (where `is_tracked_window == false`)
+/// must not arm teardown.
+pub fn gdk_event_starts_teardown_for_window(
+    event_type: i32,
+    new_window_state: i32,
+    is_tracked_window: bool,
+) -> bool {
     const GDK_DESTROY: i32 = 1;
-    const GDK_WINDOW_STATE: i32 = 32;
-    const WITHDRAWN_OR_ICONIFIED: i32 = 1 | 2;
-    event_type == GDK_DELETE
-        || event_type == GDK_DESTROY
-        || (event_type == GDK_WINDOW_STATE && new_window_state & WITHDRAWN_OR_ICONIFIED != 0)
+    let _ = new_window_state;
+    is_tracked_window && event_type == GDK_DESTROY
+}
+
+/// Backward compatible helper: only `GDK_DESTROY` (1) represents actual destruction.
+/// Window state changes (including minimize, restore, and withdraw) never start teardown.
+pub fn gdk_event_starts_teardown(event_type: i32, new_window_state: i32) -> bool {
+    const GDK_DESTROY: i32 = 1;
+    let _ = new_window_state;
+    event_type == GDK_DESTROY
 }
 
 /// The one child this process owns, for the C `atexit` hook.
@@ -536,7 +590,7 @@ fn owned_still_running(pid: i32, started: u64) -> bool {
     )
 }
 
-extern "C" fn stop_owned_on_process_exit() {
+pub extern "C" fn stop_owned_on_process_exit() {
     let pid = OWNED_PID.swap(0, Ordering::SeqCst);
     let started = OWNED_START_TICKS.swap(0, Ordering::SeqCst);
     if pid <= 0 || started == 0 {
@@ -751,8 +805,52 @@ mod tests {
         command.spawn().unwrap()
     }
 
+    static MOCK_PREVIOUS_CALLED: std::sync::atomic::AtomicU32 =
+        std::sync::atomic::AtomicU32::new(0);
+    static LAST_MOCK_ERROR_CODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+    static LAST_MOCK_RESOURCE_ID: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    unsafe extern "C" fn mock_previous_handler(
+        _display: *mut std::ffi::c_void,
+        event: *mut XErrorEvent,
+    ) -> i32 {
+        MOCK_PREVIOUS_CALLED.fetch_add(1, Ordering::SeqCst);
+        if !event.is_null() {
+            LAST_MOCK_ERROR_CODE.store((*event).error_code, Ordering::SeqCst);
+            LAST_MOCK_RESOURCE_ID.store((*event).resourceid, Ordering::SeqCst);
+        }
+        42
+    }
+
+    fn dispatch_x_error_test(
+        error_code: u8,
+        resourceid: usize,
+        teardown: bool,
+        tracked_xid: usize,
+        previous_handler: Option<XErrorHandler>,
+    ) -> i32 {
+        if should_suppress_x_error(error_code, resourceid, teardown, tracked_xid) {
+            return 0;
+        }
+        if let Some(previous) = previous_handler {
+            let mut event = XErrorEvent {
+                type_: 0,
+                display: std::ptr::null_mut(),
+                resourceid,
+                serial: 1,
+                error_code,
+                request_code: 14,
+                minor_code: 0,
+            };
+            return unsafe { previous(std::ptr::null_mut(), &mut event) };
+        }
+        0
+    }
+
     #[test]
     fn x_errors_are_ignored_only_for_teardown_drawable_codes() {
+        disarm_window_teardown();
         assert!(!window_teardown_started());
         for code in [0u8, 1, 2, 3, 8, 9, 10, 11, 255] {
             assert!(
@@ -768,18 +866,293 @@ mod tests {
                 "code {code} was ignored during teardown"
             );
         }
-        assert!(gdk_event_starts_teardown(0, 0));
+        // GDK_DESTROY represents actual destruction
         assert!(gdk_event_starts_teardown(1, 0));
-        assert!(gdk_event_starts_teardown(32, 1));
-        assert!(gdk_event_starts_teardown(32, 2));
-        assert!(gdk_event_starts_teardown(32, (1 << 7) | 2));
-        assert!(
-            !gdk_event_starts_teardown(32, 1 << 7),
-            "focus must not arm teardown"
-        );
+        assert!(gdk_event_starts_teardown_for_window(1, 0, true));
+        assert!(!gdk_event_starts_teardown_for_window(1, 0, false));
+
+        // Window state changes (including minimize, restore, and withdraw) NEVER arm teardown
+        assert!(!gdk_event_starts_teardown(32, 1));
+        assert!(!gdk_event_starts_teardown(32, 2));
+        assert!(!gdk_event_starts_teardown(32, (1 << 7) | 2));
+        assert!(!gdk_event_starts_teardown(32, 1 << 7));
         assert!(!gdk_event_starts_teardown(32, 0));
+        assert!(!gdk_event_starts_teardown_for_window(32, 2, true));
+        assert!(!gdk_event_starts_teardown_for_window(32, 0, true));
+        assert!(!gdk_event_starts_teardown(0, 0));
         assert!(!gdk_event_starts_teardown(2, 1));
         assert!(!gdk_event_starts_teardown(12, 1));
+    }
+
+    #[test]
+    fn regression_minimize_and_restore_do_not_arm_teardown_or_suppress_errors() {
+        disarm_window_teardown();
+        assert!(!window_teardown_started());
+        let tracked_xid = 0x200003;
+        set_tracked_window_xid(tracked_xid);
+
+        // 1. Minimize / iconify event (GDK_WINDOW_STATE = 32 with ICONIFIED = 2)
+        assert!(
+            !gdk_event_starts_teardown(32, 2),
+            "iconify must not arm teardown"
+        );
+        assert!(
+            !gdk_event_starts_teardown_for_window(32, 2, true),
+            "iconify must not arm teardown"
+        );
+        assert!(
+            !window_teardown_started(),
+            "window_teardown must remain false when minimized"
+        );
+
+        // Errors must NOT be suppressed while minimized
+        let aux_xid = 0x999999;
+        MOCK_PREVIOUS_CALLED.store(0, Ordering::SeqCst);
+        let ret = dispatch_x_error_test(
+            X_BAD_WINDOW,
+            aux_xid,
+            window_teardown_started(),
+            tracked_xid,
+            Some(mock_previous_handler),
+        );
+        assert_eq!(
+            ret, 42,
+            "BadWindow on aux window must be forwarded while minimized"
+        );
+        assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), 1);
+        assert_eq!(LAST_MOCK_ERROR_CODE.load(Ordering::SeqCst), X_BAD_WINDOW);
+
+        let ret = dispatch_x_error_test(
+            10, // BadAccess
+            tracked_xid,
+            window_teardown_started(),
+            tracked_xid,
+            Some(mock_previous_handler),
+        );
+        assert_eq!(ret, 42, "ordinary error must be forwarded while minimized");
+        assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), 2);
+        assert_eq!(LAST_MOCK_ERROR_CODE.load(Ordering::SeqCst), 10);
+
+        // 2. Restore event (GDK_WINDOW_STATE = 32 with iconified cleared, state 0)
+        assert!(
+            !gdk_event_starts_teardown(32, 0),
+            "restore must not arm teardown"
+        );
+        assert!(
+            !gdk_event_starts_teardown_for_window(32, 0, true),
+            "restore must not arm teardown"
+        );
+        assert!(
+            !window_teardown_started(),
+            "window_teardown must remain false when restored"
+        );
+
+        // Errors must still NOT be suppressed after restore
+        let ret = dispatch_x_error_test(
+            X_BAD_DRAWABLE,
+            aux_xid,
+            window_teardown_started(),
+            tracked_xid,
+            Some(mock_previous_handler),
+        );
+        assert_eq!(
+            ret, 42,
+            "BadDrawable on aux must be forwarded after restore"
+        );
+        assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn regression_cancelled_close_disarms_teardown_and_preserves_error_handling() {
+        let tracked_xid = 0x200003;
+        let aux_xid = 0x999999;
+        set_tracked_window_xid(tracked_xid);
+
+        // Tentatively armed or in-progress
+        note_window_teardown();
+        assert!(window_teardown_started());
+
+        // Cancelled close (e.g. child failed to stop or user cancelled)
+        disarm_window_teardown();
+        assert!(
+            !window_teardown_started(),
+            "teardown must be disarmed on cancelled close"
+        );
+
+        // Errors must NOT be suppressed after a cancelled close
+        MOCK_PREVIOUS_CALLED.store(0, Ordering::SeqCst);
+        let ret = dispatch_x_error_test(
+            X_BAD_WINDOW,
+            aux_xid,
+            window_teardown_started(),
+            tracked_xid,
+            Some(mock_previous_handler),
+        );
+        assert_eq!(
+            ret, 42,
+            "BadWindow on aux must be forwarded after cancelled close"
+        );
+        assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), 1);
+
+        let ret = dispatch_x_error_test(
+            10, // BadAccess
+            tracked_xid,
+            window_teardown_started(),
+            tracked_xid,
+            Some(mock_previous_handler),
+        );
+        assert_eq!(
+            ret, 42,
+            "ordinary error on tracked window must be forwarded after cancelled close"
+        );
+        assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn regression_auxiliary_window_events_do_not_arm_teardown() {
+        disarm_window_teardown();
+        let tracked_xid = 0x200003;
+        let aux_xid = 0x999999;
+        set_tracked_window_xid(tracked_xid);
+
+        // Auxiliary window GDK_DESTROY, GDK_DELETE, and GDK_WINDOW_STATE
+        assert!(
+            !gdk_event_starts_teardown_for_window(1, 0, false),
+            "auxiliary window destroy must not arm teardown"
+        );
+        assert!(
+            !gdk_event_starts_teardown_for_window(0, 0, false),
+            "auxiliary window delete must not arm teardown"
+        );
+        assert!(
+            !gdk_event_starts_teardown_for_window(32, 2, false),
+            "auxiliary window iconify must not arm teardown"
+        );
+        assert!(
+            !window_teardown_started(),
+            "window_teardown must remain false on aux events"
+        );
+
+        // Errors on auxiliary window must be forwarded to previous handler
+        MOCK_PREVIOUS_CALLED.store(0, Ordering::SeqCst);
+        let ret = dispatch_x_error_test(
+            X_BAD_WINDOW,
+            aux_xid,
+            window_teardown_started(),
+            tracked_xid,
+            Some(mock_previous_handler),
+        );
+        assert_eq!(ret, 42, "auxiliary window error must be forwarded");
+        assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), 1);
+        assert_eq!(LAST_MOCK_RESOURCE_ID.load(Ordering::SeqCst), aux_xid);
+    }
+
+    #[test]
+    fn regression_ordinary_non_teardown_x_errors_forwarded_to_previous_handler() {
+        disarm_window_teardown();
+        let tracked_xid = 0x200003;
+        set_tracked_window_xid(tracked_xid);
+
+        // Outside teardown, every error code is passed to previous handler
+        let codes = [1u8, 2, 3, 8, 9, 10, 11, 255];
+        let mut expected_calls = 0;
+        MOCK_PREVIOUS_CALLED.store(0, Ordering::SeqCst);
+
+        for &code in &codes {
+            let ret = dispatch_x_error_test(
+                code,
+                tracked_xid,
+                false,
+                tracked_xid,
+                Some(mock_previous_handler),
+            );
+            expected_calls += 1;
+            assert_eq!(
+                ret, 42,
+                "code {code} must be forwarded to previous handler outside teardown"
+            );
+            assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), expected_calls);
+            assert_eq!(LAST_MOCK_ERROR_CODE.load(Ordering::SeqCst), code);
+        }
+
+        // During active teardown, non-drawable/non-window codes are STILL forwarded
+        let non_drawable_codes = [1u8, 2, 8, 10, 11, 255];
+        for &code in &non_drawable_codes {
+            let ret = dispatch_x_error_test(
+                code,
+                tracked_xid,
+                true,
+                tracked_xid,
+                Some(mock_previous_handler),
+            );
+            expected_calls += 1;
+            assert_eq!(
+                ret, 42,
+                "code {code} must be forwarded to previous handler even during teardown"
+            );
+            assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), expected_calls);
+            assert_eq!(LAST_MOCK_ERROR_CODE.load(Ordering::SeqCst), code);
+        }
+    }
+
+    #[test]
+    fn regression_real_close_arms_teardown_and_suppresses_only_drawable_errors() {
+        let tracked_xid = 0x200003;
+        set_tracked_window_xid(tracked_xid);
+
+        // Real close approved or tracked window GDK_DESTROY
+        assert!(gdk_event_starts_teardown_for_window(1, 0, true));
+        note_window_teardown();
+        assert!(window_teardown_started());
+
+        MOCK_PREVIOUS_CALLED.store(0, Ordering::SeqCst);
+
+        // BadWindow (3) is suppressed during teardown (mock handler not called, returns 0)
+        let ret = dispatch_x_error_test(
+            X_BAD_WINDOW,
+            tracked_xid,
+            window_teardown_started(),
+            tracked_xid,
+            Some(mock_previous_handler),
+        );
+        assert_eq!(ret, 0, "BadWindow must be suppressed during teardown");
+        assert_eq!(
+            MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst),
+            0,
+            "previous handler must not be called"
+        );
+
+        // BadDrawable (9) is suppressed during teardown (mock handler not called, returns 0)
+        let ret = dispatch_x_error_test(
+            X_BAD_DRAWABLE,
+            tracked_xid,
+            window_teardown_started(),
+            tracked_xid,
+            Some(mock_previous_handler),
+        );
+        assert_eq!(ret, 0, "BadDrawable must be suppressed during teardown");
+        assert_eq!(
+            MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst),
+            0,
+            "previous handler must not be called"
+        );
+
+        // Any other code (e.g. BadAccess 10) is STILL forwarded
+        let ret = dispatch_x_error_test(
+            10,
+            tracked_xid,
+            window_teardown_started(),
+            tracked_xid,
+            Some(mock_previous_handler),
+        );
+        assert_eq!(ret, 42, "BadAccess must be forwarded even during teardown");
+        assert_eq!(
+            MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst),
+            1,
+            "previous handler must be called for non-drawable errors"
+        );
+
+        disarm_window_teardown();
     }
 
     #[test]
