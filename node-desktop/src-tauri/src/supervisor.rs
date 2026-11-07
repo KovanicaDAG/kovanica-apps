@@ -75,21 +75,37 @@ pub fn tracked_window_xid() -> usize {
 
 /// Ignore only BadWindow and BadDrawable, and only while teardown is active.
 /// Every other code is the toolkit's, including these two before teardown.
+///
+/// This helper is not resource-aware. Production suppression is
+/// [`should_suppress_x_error`], which also requires the tracked toplevel XID.
 pub fn ignore_x_error_during_teardown(error_code: u8, teardown: bool) -> bool {
     teardown && (error_code == X_BAD_WINDOW || error_code == X_BAD_DRAWABLE)
 }
 
-/// Resource-aware check: returns true if the X error should be suppressed.
-/// Only BadWindow and BadDrawable are suppressed, only during active teardown,
-/// and never during normal operation (e.g. minimize, restore, auxiliary windows, cancelled close).
+/// `GdkEventType::GDK_DESTROY`.
+pub const GDK_DESTROY: i32 = 1;
+/// `GdkEventType::GDK_WINDOW_STATE`.
+pub const GDK_WINDOW_STATE: i32 = 32;
+/// `GdkWindowState::GDK_WINDOW_STATE_ICONIFIED` (`1 << 1`). Minimize and
+/// restore both set this bit in `changed_mask`. It is not window destruction.
+pub const GDK_WINDOW_STATE_ICONIFIED: i32 = 1 << 1;
+
+/// Suppress only `BadWindow` / `BadDrawable` for the demonstrated tracked
+/// toplevel resource, and only while teardown is already armed.
+///
+/// `resource_id` must equal `tracked_xid`, and `tracked_xid` must be non-zero.
+/// A teardown flag alone does not name a resource. Iconification, restore, and
+/// stale GDK event metadata are not inputs: those are not approved close.
 pub fn should_suppress_x_error(
     error_code: u8,
     resource_id: usize,
     teardown: bool,
     tracked_xid: usize,
 ) -> bool {
-    let _ = (resource_id, tracked_xid);
-    teardown && (error_code == X_BAD_WINDOW || error_code == X_BAD_DRAWABLE)
+    teardown
+        && tracked_xid != 0
+        && resource_id == tracked_xid
+        && (error_code == X_BAD_WINDOW || error_code == X_BAD_DRAWABLE)
 }
 
 /// Check if a GDK event initiates teardown for a specific window.
@@ -104,7 +120,6 @@ pub fn gdk_event_starts_teardown_for_window(
     new_window_state: i32,
     is_tracked_window: bool,
 ) -> bool {
-    const GDK_DESTROY: i32 = 1;
     let _ = new_window_state;
     is_tracked_window && event_type == GDK_DESTROY
 }
@@ -112,9 +127,113 @@ pub fn gdk_event_starts_teardown_for_window(
 /// Backward compatible helper: only `GDK_DESTROY` (1) represents actual destruction.
 /// Window state changes (including minimize, restore, and withdraw) never start teardown.
 pub fn gdk_event_starts_teardown(event_type: i32, new_window_state: i32) -> bool {
-    const GDK_DESTROY: i32 = 1;
     let _ = new_window_state;
     event_type == GDK_DESTROY
+}
+
+/// `GdkEventType` of the event currently inside `gtk_main_do_event`.
+/// `-1` means no dispatch is in progress. Cleared when that call returns so a
+/// later X error is not attributed to a minimize or restore that already finished.
+static CURRENT_GDK_EVENT: AtomicI32 = AtomicI32::new(-1);
+static LAST_WINDOW_STATE_CHANGED: AtomicI32 = AtomicI32::new(0);
+static LAST_WINDOW_STATE_NEW: AtomicI32 = AtomicI32::new(0);
+
+/// Record the GDK event the production handler is dispatching.
+///
+/// Does not arm teardown. Window-state `changed_mask` bit 1 (iconified) is
+/// stored only so a forwarded error can be logged. It is not a close.
+pub fn note_gdk_dispatch(event_type: i32, changed_mask: i32, new_window_state: i32) {
+    CURRENT_GDK_EVENT.store(event_type, Ordering::SeqCst);
+    if event_type == GDK_WINDOW_STATE {
+        LAST_WINDOW_STATE_CHANGED.store(changed_mask, Ordering::SeqCst);
+        LAST_WINDOW_STATE_NEW.store(new_window_state, Ordering::SeqCst);
+    }
+}
+
+/// Drop the in-dispatch GDK event. Call this after `gtk_main_do_event` returns.
+pub fn clear_gdk_dispatch() {
+    CURRENT_GDK_EVENT.store(-1, Ordering::SeqCst);
+    LAST_WINDOW_STATE_CHANGED.store(0, Ordering::SeqCst);
+    LAST_WINDOW_STATE_NEW.store(0, Ordering::SeqCst);
+}
+
+/// Event type currently inside GDK dispatch, or `-1` after it returns.
+pub fn current_gdk_event() -> i32 {
+    CURRENT_GDK_EVENT.load(Ordering::SeqCst)
+}
+
+/// `(changed_mask, new_window_state)` from the GDK event in progress.
+/// Both are zero after [`clear_gdk_dispatch`].
+pub fn gdk_window_state_snapshot() -> (i32, i32) {
+    (
+        LAST_WINDOW_STATE_CHANGED.load(Ordering::SeqCst),
+        LAST_WINDOW_STATE_NEW.load(Ordering::SeqCst),
+    )
+}
+
+/// Delete-event emission: the tracked widget, or any widget when none is recorded yet.
+pub fn delete_event_targets_tracked(
+    tracked_widget: *mut std::ffi::c_void,
+    emitting_widget: *mut std::ffi::c_void,
+) -> bool {
+    tracked_widget.is_null() || emitting_widget == tracked_widget
+}
+
+fn write_stderr(msg: &str) {
+    unsafe {
+        libc::write(2, msg.as_ptr() as *const libc::c_void, msg.len());
+    }
+}
+
+/// Production `XSetErrorHandler` body.
+///
+/// Suppression uses [`should_suppress_x_error`] only. A tracked-window
+/// `BadWindow`/`BadDrawable` that lines up with `GDK_WINDOW_STATE` and
+/// iconification is not an approved close and is not swallowed here.
+///
+/// The previous handler is invoked as-is. If it returns, the owned child is
+/// left running: a forwarded error is not assumed fatal. GTK 3.24's handler
+/// (`gdk_x_error` → `_gdk_x11_display_error_event`) returns for a display it
+/// does not own or for a serial covered by an error trap, and `_exit(1)`s for
+/// an untrapped error on a GDK display. That `_exit` skips `atexit`, so the
+/// child stop for process death is the parent-death reaper armed with the
+/// owned pid, not a stop placed before this call.
+///
+/// # Safety
+/// `event` must be a live `XErrorEvent` for the duration of the call, or null.
+/// `previous`, when set, must be an X error handler.
+pub unsafe fn dispatch_x_error(
+    display: *mut std::ffi::c_void,
+    event: *mut XErrorEvent,
+    previous: Option<XErrorHandler>,
+) -> i32 {
+    if event.is_null() {
+        write_stderr("node x error ignored null event\n");
+        return 0;
+    }
+    let code = unsafe { (*event).error_code };
+    let resource_id = unsafe { (*event).resourceid };
+    let request = unsafe { (*event).request_code };
+    let teardown = window_teardown_started();
+    let tracked_xid = tracked_window_xid();
+    if should_suppress_x_error(code, resource_id, teardown, tracked_xid) {
+        write_stderr(&format!(
+            "node x error {code} ignored during teardown resource={resource_id}\n"
+        ));
+        return 0;
+    }
+    if code == X_BAD_WINDOW || code == X_BAD_DRAWABLE {
+        let gdk_event = current_gdk_event();
+        let (changed, new_state) = gdk_window_state_snapshot();
+        write_stderr(&format!(
+            "node x error {code} passed to toolkit teardown={teardown} request={request} resource={resource_id} tracked={tracked_xid} gdk_event={gdk_event} window_changed={changed} window_new={new_state}\n"
+        ));
+    }
+    if let Some(previous) = previous {
+        return unsafe { previous(display, event) };
+    }
+    write_stderr(&format!("node x error {code} had no previous handler\n"));
+    0
 }
 
 /// The one child this process owns, for the C `atexit` hook.
@@ -124,6 +243,14 @@ pub fn gdk_event_starts_teardown(event_type: i32, new_window_state: i32) -> bool
 /// and only if `/proc` still shows the same start time.
 static OWNED_PID: AtomicI32 = AtomicI32::new(0);
 static OWNED_START_TICKS: AtomicU64 = AtomicU64::new(0);
+/// Set by the GUI process before it can own a child. Library tests leave this
+/// false so `start` does not re-exec the test harness.
+static PARENT_DEATH_REAPER_ENABLED: AtomicBool = AtomicBool::new(false);
+static REAPER_CHILD: Mutex<Option<Child>> = Mutex::new(None);
+/// Test-only replacement for `current_exe`. Production arming re-execs this
+/// binary; tests point it at a script so the test harness is not re-execed.
+#[cfg(test)]
+static REAPER_EXE_OVERRIDE: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
 /// Test-only. When set, the exit hook's `kill` calls fail and touch no pid.
 #[cfg(test)]
 static EXIT_SIGNAL_FAILS: AtomicBool = AtomicBool::new(false);
@@ -288,7 +415,15 @@ impl Supervisor {
             inner.last_error = None;
             inner.generation = inner.generation.wrapping_add(1);
         }
-        publish_owned(pid);
+        if let Err(err) = publish_owned(pid) {
+            let stop_result = self.stop();
+            return match stop_result {
+                Ok(()) => Err(format!("{err} The child was stopped.")),
+                Err(stop_err) => Err(format!(
+                    "{err} The child was not confirmed stopped: {stop_err}"
+                )),
+            };
+        }
         {
             let mut logs = self.logs.lock().expect("log lock");
             logs.clear();
@@ -461,6 +596,7 @@ impl Supervisor {
                 inner.state = ProcessState::Exited;
                 clear_owned_publication();
                 drop(inner);
+                disarm_parent_death_reaper();
                 let mut logs = self.logs.lock().expect("log lock");
                 push_log(
                     &mut logs,
@@ -539,23 +675,390 @@ pub fn arm_exit_hook() {
     });
 }
 
-fn publish_owned(pid: u32) {
+fn publish_owned(pid: u32) -> Result<(), String> {
     if pid == 0 || pid > i32::MAX as u32 {
         clear_owned_publication();
-        return;
+        disarm_parent_death_reaper();
+        return Err("refusing to publish a child pid of 0".into());
     }
-    match process_start_ticks(pid as i32) {
-        Some(ticks) => {
-            OWNED_START_TICKS.store(ticks, Ordering::SeqCst);
-            OWNED_PID.store(pid as i32, Ordering::SeqCst);
-        }
-        None => clear_owned_publication(),
+    let Some(ticks) = process_start_ticks(pid as i32) else {
+        clear_owned_publication();
+        disarm_parent_death_reaper();
+        return Err(
+            "could not read the child start time, so it was not published to the reaper".into(),
+        );
+    };
+    OWNED_START_TICKS.store(ticks, Ordering::SeqCst);
+    OWNED_PID.store(pid as i32, Ordering::SeqCst);
+    if let Err(err) = arm_parent_death_reaper(pid as i32, ticks) {
+        clear_owned_publication();
+        return Err(err);
     }
+    Ok(())
 }
 
 fn clear_owned_publication() {
     OWNED_PID.store(0, Ordering::SeqCst);
     OWNED_START_TICKS.store(0, Ordering::SeqCst);
+}
+
+/// Arm the process-death stop used when GTK `_exit`s from an untrapped X error.
+///
+/// The GUI calls this once, before a child can be published. The reaper is a
+/// separate process because `_exit` does not run `atexit` and does not return
+/// to `dispatch_x_error`. It is not armed for an X error whose previous handler
+/// returns.
+pub fn enable_parent_death_reaper() {
+    PARENT_DEATH_REAPER_ENABLED.store(true, Ordering::SeqCst);
+}
+
+/// Arguments after the program name. `Ok(None)` means this is not a reaper.
+///
+/// Order: parent pid, parent start ticks, node pid, node start ticks.
+pub fn parse_reaper_args<I>(args: I) -> Result<Option<(i32, u64, i32, u64)>, String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut args = args.into_iter();
+    let Some(first) = args.next() else {
+        return Ok(None);
+    };
+    if first != "--parent-death-reaper" {
+        return Ok(None);
+    }
+    let parent_pid = args
+        .next()
+        .ok_or("parent-death reaper is missing the parent pid")?
+        .parse::<i32>()
+        .map_err(|_| "parent-death reaper parent pid is not an integer")?;
+    let parent_started = args
+        .next()
+        .ok_or("parent-death reaper is missing the parent start time")?
+        .parse::<u64>()
+        .map_err(|_| "parent-death reaper parent start time is not an integer")?;
+    let node_pid = args
+        .next()
+        .ok_or("parent-death reaper is missing the node pid")?
+        .parse::<i32>()
+        .map_err(|_| "parent-death reaper node pid is not an integer")?;
+    let node_started = args
+        .next()
+        .ok_or("parent-death reaper is missing the node start time")?
+        .parse::<u64>()
+        .map_err(|_| "parent-death reaper node start time is not an integer")?;
+    if parent_pid <= 0
+        || node_pid <= 0
+        || parent_started == 0
+        || node_started == 0
+        || parent_pid == node_pid
+    {
+        return Err(
+            "parent-death reaper requires a positive parent pid, a different positive node pid, and non-zero start times"
+                .into(),
+        );
+    }
+    Ok(Some((parent_pid, parent_started, node_pid, node_started)))
+}
+
+/// True only for the process this supervisor just spawned.
+///
+/// While the parent is still the process whose start time was published, the
+/// node must be its direct child. If that parent has already exited, the node
+/// must have been reparented to init (ppid 1). In both cases it must be a
+/// process-group leader (`pgrp == pid`, which `setsid` establishes) and the
+/// node's start time must be the published one, not earlier than the parent's.
+/// A reused pid fails the start-time check. A bystander whose parent is some
+/// other live process fails the ppid check. This is the process relationship
+/// recorded at arm time, not a guess about window state.
+fn adopt_reaper_target(
+    parent_pid: i32,
+    parent_started: u64,
+    node_pid: i32,
+    node_started: u64,
+) -> bool {
+    let Some(node) = proc_stat(node_pid) else {
+        return false;
+    };
+    if node.start_ticks != node_started
+        || node.pgrp != node_pid
+        || node.start_ticks < parent_started
+    {
+        return false;
+    }
+    match proc_stat(parent_pid) {
+        Some(parent) if parent.start_ticks == parent_started => node.ppid == parent_pid,
+        // Published parent is gone. Only the orphaned group leader is in scope.
+        _ => node.ppid == 1,
+    }
+}
+
+/// Block until `parent_pid` exits or `stop` is set.
+///
+/// The owned child is signaled only after [`adopt_reaper_target`] accepts it.
+/// On parent exit, runs the same bounded group stop as the `atexit` hook
+/// (`grace`, then SIGKILL only if that same start time is still running).
+/// `stop` means this reaper was disarmed while it had not yet decided the
+/// parent was dead (normal Stop, or a newer reaper replaced this one). The
+/// node is not signaled in that case. `grace` is [`STOP_GRACE`] on the
+/// production path.
+pub fn parent_death_reaper_loop(
+    parent_pid: i32,
+    parent_started: u64,
+    node_pid: i32,
+    node_started: u64,
+    grace: Duration,
+    stop: &AtomicBool,
+) {
+    if !adopt_reaper_target(parent_pid, parent_started, node_pid, node_started) {
+        let msg = format!(
+            "node parent-death reaper: not adopting pid {node_pid}; it is not a group-leader child of parent {parent_pid} with the published start times; not signaling\n"
+        );
+        write_stderr(&msg);
+        return;
+    }
+    let watch = watch_parent(parent_pid, parent_started);
+    if matches!(watch, ParentWatch::AlreadyGone) {
+        stop_adopted_child(parent_pid, node_pid, node_started, grace);
+        return;
+    }
+    loop {
+        if stop.load(Ordering::SeqCst) {
+            let msg = format!("node parent-death reaper: disarmed; not signaling {node_pid}\n");
+            write_stderr(&msg);
+            return;
+        }
+        if parent_has_exited(parent_pid, parent_started, &watch) {
+            stop_adopted_child(parent_pid, node_pid, node_started, grace);
+            return;
+        }
+    }
+}
+
+fn stop_adopted_child(parent_pid: i32, node_pid: i32, node_started: u64, grace: Duration) {
+    let msg = format!(
+        "node parent-death reaper: parent {parent_pid} exited; stopping owned pid {node_pid}\n"
+    );
+    write_stderr(&msg);
+    let outcome = signal_owned_group(node_pid, node_started, grace);
+    let msg = format!("node parent-death reaper: stop outcome {outcome:?}\n");
+    write_stderr(&msg);
+}
+
+/// Run the reaper when `args` starts with `--parent-death-reaper`.
+///
+/// Returns `None` when this process is the normal GUI. Otherwise the process
+/// should exit with the returned code. Installs a SIGTERM handler only on
+/// that path so a unit test of the loop does not steal the test process's
+/// signals. SIGTERM while the parent is alive disarms the reaper. The stop
+/// grace is [`STOP_GRACE`] (10 seconds), the same interval as Stop.
+pub fn run_parent_death_reaper_from_args<I>(args: I) -> Option<i32>
+where
+    I: IntoIterator<Item = String>,
+{
+    match parse_reaper_args(args) {
+        Ok(None) => None,
+        Err(err) => {
+            let msg = format!("node parent-death reaper: {err}\n");
+            write_stderr(&msg);
+            Some(2)
+        }
+        Ok(Some((parent_pid, parent_started, node_pid, node_started))) => {
+            unsafe {
+                libc::signal(libc::SIGHUP, libc::SIG_IGN);
+                libc::signal(
+                    libc::SIGTERM,
+                    reaper_term as *const () as libc::sighandler_t,
+                );
+            }
+            unblock_sigterm();
+            parent_death_reaper_loop(
+                parent_pid,
+                parent_started,
+                node_pid,
+                node_started,
+                STOP_GRACE,
+                &REAPER_PROCESS_STOP,
+            );
+            Some(0)
+        }
+    }
+}
+
+static REAPER_PROCESS_STOP: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn reaper_term(_signal: i32) {
+    REAPER_PROCESS_STOP.store(true, Ordering::SeqCst);
+}
+
+fn unblock_sigterm() {
+    unsafe {
+        let mut set = std::mem::zeroed::<libc::sigset_t>();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, libc::SIGTERM);
+        libc::sigprocmask(libc::SIG_UNBLOCK, &set, std::ptr::null_mut());
+    }
+}
+
+fn pidfd_open(pid: i32) -> Option<libc::c_int> {
+    if pid <= 0 {
+        return None;
+    }
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    if fd < 0 {
+        None
+    } else {
+        Some(fd as libc::c_int)
+    }
+}
+
+enum ParentWatch {
+    /// pidfd refers to the parent whose start time was published.
+    Fd(libc::c_int),
+    /// pidfd was not available. Identity is re-checked via start time.
+    PollProc,
+    /// The published parent is already gone or its pid was reused.
+    AlreadyGone,
+}
+
+impl Drop for ParentWatch {
+    fn drop(&mut self) {
+        if let ParentWatch::Fd(fd) = self {
+            unsafe {
+                libc::close(*fd);
+            }
+        }
+    }
+}
+
+fn watch_parent(parent_pid: i32, parent_started: u64) -> ParentWatch {
+    match pidfd_open(parent_pid) {
+        Some(fd) => match process_start_ticks(parent_pid) {
+            Some(ticks) if ticks == parent_started => ParentWatch::Fd(fd),
+            _ => {
+                unsafe {
+                    libc::close(fd);
+                }
+                ParentWatch::AlreadyGone
+            }
+        },
+        None => match process_start_ticks(parent_pid) {
+            Some(ticks) if ticks == parent_started => ParentWatch::PollProc,
+            _ => ParentWatch::AlreadyGone,
+        },
+    }
+}
+
+fn parent_has_exited(parent_pid: i32, parent_started: u64, watch: &ParentWatch) -> bool {
+    if let ParentWatch::Fd(fd) = watch {
+        let mut pollfd = libc::pollfd {
+            fd: *fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let rc = unsafe { libc::poll(&mut pollfd, 1, 50) };
+        if rc > 0 {
+            // Readable pidfd means this process, not a later occupant of the pid, exited.
+            return pollfd.revents & (libc::POLLIN | libc::POLLERR | libc::POLLHUP) != 0;
+        }
+        if rc == 0 {
+            return false;
+        }
+    }
+    match process_start_ticks(parent_pid) {
+        Some(ticks) if ticks == parent_started => {
+            thread::sleep(Duration::from_millis(50));
+            false
+        }
+        _ => true,
+    }
+}
+
+fn reaper_executable() -> std::io::Result<std::path::PathBuf> {
+    #[cfg(test)]
+    if let Some(path) = REAPER_EXE_OVERRIDE.lock().expect("reaper exe").clone() {
+        return Ok(path);
+    }
+    std::env::current_exe()
+}
+
+fn arm_parent_death_reaper(node_pid: i32, start_ticks: u64) -> Result<(), String> {
+    if !PARENT_DEATH_REAPER_ENABLED.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    disarm_parent_death_reaper();
+    let exe = reaper_executable()
+        .map_err(|err| format!("node parent-death reaper was not started: {err}"))?;
+    let parent_pid = std::process::id();
+    let parent_started = process_start_ticks(parent_pid as i32).ok_or(
+        "node parent-death reaper was not started: the supervisor start time could not be read",
+    )?;
+    let mut command = Command::new(exe);
+    command
+        .arg("--parent-death-reaper")
+        .arg(parent_pid.to_string())
+        .arg(parent_started.to_string())
+        .arg(node_pid.to_string())
+        .arg(start_ticks.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit());
+    // Safety: runs in the forked child before exec. Block SIGTERM until the
+    // reaper installs its handler so a disarm during startup cannot use the
+    // default terminate action after the handler would have been required,
+    // and put the reaper in its own session so a signal to the GUI group
+    // does not kill it before the GUI itself has exited.
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let mut set = std::mem::zeroed::<libc::sigset_t>();
+            libc::sigemptyset(&mut set);
+            libc::sigaddset(&mut set, libc::SIGTERM);
+            if libc::sigprocmask(libc::SIG_BLOCK, &set, std::ptr::null_mut()) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    match command.spawn() {
+        Ok(child) => {
+            let pid = child.id();
+            eprintln!("node parent-death reaper pid {pid} watching owned pid {node_pid}");
+            *REAPER_CHILD.lock().expect("reaper child") = Some(child);
+            Ok(())
+        }
+        Err(err) => Err(format!("node parent-death reaper was not started: {err}")),
+    }
+}
+
+fn disarm_parent_death_reaper() {
+    let child = REAPER_CHILD.lock().expect("reaper child").take();
+    let Some(mut child) = child else {
+        return;
+    };
+    let pid = child.id() as i32;
+    if pid > 0 {
+        unsafe {
+            libc::kill(pid, libc::SIGTERM);
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) if Instant::now() >= deadline => {
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                }
+                let _ = child.wait();
+                return;
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(20)),
+            Err(_) => return,
+        }
+    }
 }
 
 /// `starttime` from `/proc/pid/stat` (field 22). `None` if that pid is gone.
@@ -565,6 +1068,8 @@ fn process_start_ticks(pid: i32) -> Option<u64> {
 
 struct ProcStat {
     state: u8,
+    ppid: i32,
+    pgrp: i32,
     start_ticks: u64,
 }
 
@@ -574,11 +1079,19 @@ fn proc_stat(pid: i32) -> Option<ProcStat> {
     }
     let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let rest = text.rsplit_once(')')?.1;
-    // Tokens after `comm` begin at field 3 (state). Field 22 is starttime.
+    // Tokens after `comm` begin at field 3 (state). Field 4 is ppid, 5 is pgrp,
+    // 22 is starttime.
     let mut fields = rest.split_whitespace();
     let state = *fields.next()?.as_bytes().first()?;
-    let start_ticks = fields.nth(18)?.parse().ok()?;
-    Some(ProcStat { state, start_ticks })
+    let ppid = fields.next()?.parse().ok()?;
+    let pgrp = fields.next()?.parse().ok()?;
+    let start_ticks = fields.nth(16)?.parse().ok()?;
+    Some(ProcStat {
+        state,
+        ppid,
+        pgrp,
+        start_ticks,
+    })
 }
 
 /// Same start time, and not a zombie. A zombie keeps its pid and start time
@@ -620,7 +1133,8 @@ fn signal_owned_group(pid: i32, started: u64, grace: Duration) -> OwnedSignal {
             OwnedSignal::NotOwned
         };
     }
-    match send_group_signal(pid, libc::SIGTERM) {
+    match send_group_signal(pid, started, libc::SIGTERM) {
+        GroupSignal::NotOwned => return OwnedSignal::NotOwned,
         GroupSignal::Gone => {
             if !owned_still_running(pid, started) {
                 return if process_start_ticks(pid) == Some(started) {
@@ -653,7 +1167,8 @@ fn signal_owned_group(pid: i32, started: u64, grace: Duration) -> OwnedSignal {
     if !owned_still_running(pid, started) {
         return OwnedSignal::Exited;
     }
-    match send_group_signal(pid, libc::SIGKILL) {
+    match send_group_signal(pid, started, libc::SIGKILL) {
+        GroupSignal::NotOwned => OwnedSignal::NotOwned,
         GroupSignal::Sent => OwnedSignal::Killed,
         GroupSignal::Gone => {
             if owned_still_running(pid, started) {
@@ -673,15 +1188,41 @@ enum GroupSignal {
     Sent,
     Gone,
     Failed,
+    /// Identity did not match. Nothing was signaled.
+    NotOwned,
 }
 
-fn send_group_signal(pid: i32, signal: i32) -> GroupSignal {
+/// Signal `pid`'s process group only while a pidfd holds that exact task and
+/// `/proc` still shows the published start time and `pgrp == pid`.
+///
+/// Holding the pidfd keeps the pid from being reused across the `kill`. A
+/// process that is not its own group leader is refused: `kill(-pid)` would
+/// name some other group whose id happens to equal this pid.
+fn send_group_signal(pid: i32, started: u64, signal: i32) -> GroupSignal {
     if pid <= 0 {
         return GroupSignal::Failed;
     }
     #[cfg(test)]
     if EXIT_SIGNAL_FAILS.load(Ordering::SeqCst) {
         return GroupSignal::Failed;
+    }
+    let Some(fd) = pidfd_open(pid) else {
+        return GroupSignal::Gone;
+    };
+    struct CloseFd(libc::c_int);
+    impl Drop for CloseFd {
+        fn drop(&mut self) {
+            unsafe {
+                libc::close(self.0);
+            }
+        }
+    }
+    let _hold = CloseFd(fd);
+    let Some(stat) = proc_stat(pid) else {
+        return GroupSignal::Gone;
+    };
+    if stat.start_ticks != started || stat.pgrp != pid {
+        return GroupSignal::NotOwned;
     }
     let rc = unsafe { libc::kill(-pid, signal) };
     if rc == 0 {
@@ -764,6 +1305,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::process::Command;
+    use std::sync::Arc;
 
     fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
         let path = dir.join(name);
@@ -805,6 +1347,80 @@ mod tests {
         command.spawn().unwrap()
     }
 
+    /// Parent process whose forked child is in its own session. The child's
+    /// ppid is the parent, which is what the reaper requires before it adopts.
+    fn spawn_parent_child(binary: &Path, pid_file: &Path) -> (Child, i32) {
+        let mut parent = Command::new("python3")
+            .arg("-c")
+            .arg(
+                "import os, sys, time\nbinary, pid_file = sys.argv[1], sys.argv[2]\npid = os.fork()\nif pid == 0:\n    os.setsid()\n    os.execv(binary, [binary])\nopen(pid_file, 'w').write(str(pid))\nwhile True:\n    time.sleep(0.05)\n",
+            )
+            .arg(binary)
+            .arg(pid_file)
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Ok(text) = fs::read_to_string(pid_file) {
+                if let Ok(pid) = text.trim().parse::<i32>() {
+                    if proc_stat(pid)
+                        .is_some_and(|stat| stat.ppid == parent.id() as i32 && stat.pgrp == pid)
+                    {
+                        return (parent, pid);
+                    }
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "parent did not publish a group-leader child"
+            );
+            match parent.try_wait() {
+                Ok(Some(_)) => panic!("parent exited before publishing a child"),
+                Ok(None) => thread::sleep(Duration::from_millis(20)),
+                Err(_) => panic!("could not wait for the parent"),
+            }
+        }
+    }
+
+    fn cmdline_contains(needle: &str) -> bool {
+        let Ok(entries) = fs::read_dir("/proc") else {
+            return false;
+        };
+        for entry in entries.flatten() {
+            let Ok(bytes) = fs::read(entry.path().join("cmdline")) else {
+                continue;
+            };
+            if String::from_utf8_lossy(&bytes).contains(needle) {
+                return true;
+            }
+        }
+        false
+    }
+
+    struct ReaperTestGuard;
+    impl ReaperTestGuard {
+        fn enable(exe: PathBuf) -> Self {
+            *REAPER_EXE_OVERRIDE.lock().expect("reaper exe") = Some(exe);
+            PARENT_DEATH_REAPER_ENABLED.store(true, Ordering::SeqCst);
+            ReaperTestGuard
+        }
+    }
+    impl Drop for ReaperTestGuard {
+        fn drop(&mut self) {
+            PARENT_DEATH_REAPER_ENABLED.store(false, Ordering::SeqCst);
+            *REAPER_EXE_OVERRIDE.lock().expect("reaper exe") = None;
+            disarm_parent_death_reaper();
+        }
+    }
+
+    static PROCESS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+        PROCESS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+    }
+
     static MOCK_PREVIOUS_CALLED: std::sync::atomic::AtomicU32 =
         std::sync::atomic::AtomicU32::new(0);
     static LAST_MOCK_ERROR_CODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
@@ -823,33 +1439,48 @@ mod tests {
         42
     }
 
-    fn dispatch_x_error_test(
-        error_code: u8,
-        resourceid: usize,
-        teardown: bool,
-        tracked_xid: usize,
-        previous_handler: Option<XErrorHandler>,
-    ) -> i32 {
-        if should_suppress_x_error(error_code, resourceid, teardown, tracked_xid) {
-            return 0;
+    /// Inject an X error through [`dispatch_x_error`], the production callback body.
+    fn inject_x_error(error_code: u8, resourceid: usize) -> i32 {
+        let mut event = XErrorEvent {
+            type_: 0,
+            display: std::ptr::null_mut(),
+            resourceid,
+            serial: 1,
+            error_code,
+            request_code: 14,
+            minor_code: 0,
+        };
+        unsafe {
+            dispatch_x_error(
+                std::ptr::null_mut(),
+                &mut event,
+                Some(mock_previous_handler),
+            )
         }
-        if let Some(previous) = previous_handler {
-            let mut event = XErrorEvent {
-                type_: 0,
-                display: std::ptr::null_mut(),
-                resourceid,
-                serial: 1,
-                error_code,
-                request_code: 14,
-                minor_code: 0,
-            };
-            return unsafe { previous(std::ptr::null_mut(), &mut event) };
+    }
+
+    fn reset_x11(tracked_xid: usize) {
+        disarm_window_teardown();
+        set_tracked_window_xid(tracked_xid);
+        clear_gdk_dispatch();
+        MOCK_PREVIOUS_CALLED.store(0, Ordering::SeqCst);
+        LAST_MOCK_ERROR_CODE.store(0, Ordering::SeqCst);
+        LAST_MOCK_RESOURCE_ID.store(0, Ordering::SeqCst);
+    }
+
+    /// Same sequence as `on_gdk_event`: record the event, arm teardown only when
+    /// [`gdk_event_starts_teardown_for_window`] says so, then the caller invokes
+    /// [`dispatch_x_error`] and [`clear_gdk_dispatch`].
+    fn dispatch_tracked_gdk_event(event_type: i32, changed_mask: i32, new_window_state: i32) {
+        note_gdk_dispatch(event_type, changed_mask, new_window_state);
+        if gdk_event_starts_teardown_for_window(event_type, new_window_state, true) {
+            note_window_teardown();
         }
-        0
     }
 
     #[test]
     fn x_errors_are_ignored_only_for_teardown_drawable_codes() {
+        let _lock = test_lock();
         disarm_window_teardown();
         assert!(!window_teardown_started());
         for code in [0u8, 1, 2, 3, 8, 9, 10, 11, 255] {
@@ -857,28 +1488,70 @@ mod tests {
                 !ignore_x_error_during_teardown(code, false),
                 "code {code} was ignored before teardown"
             );
+            assert!(
+                !should_suppress_x_error(code, 0x200003, false, 0x200003),
+                "code {code} was suppressed before teardown"
+            );
         }
         assert!(ignore_x_error_during_teardown(X_BAD_WINDOW, true));
         assert!(ignore_x_error_during_teardown(X_BAD_DRAWABLE, true));
+        assert!(should_suppress_x_error(
+            X_BAD_WINDOW,
+            0x200003,
+            true,
+            0x200003
+        ));
+        assert!(should_suppress_x_error(
+            X_BAD_DRAWABLE,
+            0x200003,
+            true,
+            0x200003
+        ));
+        assert!(
+            !should_suppress_x_error(X_BAD_WINDOW, 0x999999, true, 0x200003),
+            "unrelated resource was suppressed"
+        );
+        assert!(
+            !should_suppress_x_error(X_BAD_DRAWABLE, 0x200003, true, 0),
+            "teardown without a tracked xid was suppressed"
+        );
         for code in [0u8, 1, 2, 8, 10, 11, 255] {
             assert!(
                 !ignore_x_error_during_teardown(code, true),
                 "code {code} was ignored during teardown"
             );
+            assert!(
+                !should_suppress_x_error(code, 0x200003, true, 0x200003),
+                "code {code} was suppressed during teardown"
+            );
         }
         // GDK_DESTROY represents actual destruction
-        assert!(gdk_event_starts_teardown(1, 0));
-        assert!(gdk_event_starts_teardown_for_window(1, 0, true));
-        assert!(!gdk_event_starts_teardown_for_window(1, 0, false));
+        assert!(gdk_event_starts_teardown(GDK_DESTROY, 0));
+        assert!(gdk_event_starts_teardown_for_window(GDK_DESTROY, 0, true));
+        assert!(!gdk_event_starts_teardown_for_window(GDK_DESTROY, 0, false));
 
         // Window state changes (including minimize, restore, and withdraw) NEVER arm teardown
-        assert!(!gdk_event_starts_teardown(32, 1));
-        assert!(!gdk_event_starts_teardown(32, 2));
-        assert!(!gdk_event_starts_teardown(32, (1 << 7) | 2));
-        assert!(!gdk_event_starts_teardown(32, 1 << 7));
-        assert!(!gdk_event_starts_teardown(32, 0));
-        assert!(!gdk_event_starts_teardown_for_window(32, 2, true));
-        assert!(!gdk_event_starts_teardown_for_window(32, 0, true));
+        assert!(!gdk_event_starts_teardown(GDK_WINDOW_STATE, 1));
+        assert!(!gdk_event_starts_teardown(
+            GDK_WINDOW_STATE,
+            GDK_WINDOW_STATE_ICONIFIED
+        ));
+        assert!(!gdk_event_starts_teardown(
+            GDK_WINDOW_STATE,
+            (1 << 7) | GDK_WINDOW_STATE_ICONIFIED
+        ));
+        assert!(!gdk_event_starts_teardown(GDK_WINDOW_STATE, 1 << 7));
+        assert!(!gdk_event_starts_teardown(GDK_WINDOW_STATE, 0));
+        assert!(!gdk_event_starts_teardown_for_window(
+            GDK_WINDOW_STATE,
+            GDK_WINDOW_STATE_ICONIFIED,
+            true
+        ));
+        assert!(!gdk_event_starts_teardown_for_window(
+            GDK_WINDOW_STATE,
+            0,
+            true
+        ));
         assert!(!gdk_event_starts_teardown(0, 0));
         assert!(!gdk_event_starts_teardown(2, 1));
         assert!(!gdk_event_starts_teardown(12, 1));
@@ -886,186 +1559,173 @@ mod tests {
 
     #[test]
     fn regression_minimize_and_restore_do_not_arm_teardown_or_suppress_errors() {
-        disarm_window_teardown();
-        assert!(!window_teardown_started());
+        let _lock = test_lock();
         let tracked_xid = 0x200003;
-        set_tracked_window_xid(tracked_xid);
-
-        // 1. Minimize / iconify event (GDK_WINDOW_STATE = 32 with ICONIFIED = 2)
-        assert!(
-            !gdk_event_starts_teardown(32, 2),
-            "iconify must not arm teardown"
-        );
-        assert!(
-            !gdk_event_starts_teardown_for_window(32, 2, true),
-            "iconify must not arm teardown"
-        );
-        assert!(
-            !window_teardown_started(),
-            "window_teardown must remain false when minimized"
-        );
-
-        // Errors must NOT be suppressed while minimized
         let aux_xid = 0x999999;
-        MOCK_PREVIOUS_CALLED.store(0, Ordering::SeqCst);
-        let ret = dispatch_x_error_test(
-            X_BAD_WINDOW,
-            aux_xid,
-            window_teardown_started(),
-            tracked_xid,
-            Some(mock_previous_handler),
+        reset_x11(tracked_xid);
+
+        // Injected while the production dispatch still has the minimize event.
+        // changed_mask bit 1 is ICONIFIED. This is not an approved close.
+        dispatch_tracked_gdk_event(
+            GDK_WINDOW_STATE,
+            GDK_WINDOW_STATE_ICONIFIED,
+            GDK_WINDOW_STATE_ICONIFIED,
         );
+        assert_eq!(current_gdk_event(), GDK_WINDOW_STATE);
+        assert_eq!(
+            gdk_window_state_snapshot().0 & GDK_WINDOW_STATE_ICONIFIED,
+            GDK_WINDOW_STATE_ICONIFIED
+        );
+        assert!(!window_teardown_started(), "minimize must not arm teardown");
+
+        let ret = inject_x_error(X_BAD_WINDOW, tracked_xid);
         assert_eq!(
             ret, 42,
-            "BadWindow on aux window must be forwarded while minimized"
+            "BadWindow on the tracked window must be forwarded during minimize"
         );
         assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), 1);
-        assert_eq!(LAST_MOCK_ERROR_CODE.load(Ordering::SeqCst), X_BAD_WINDOW);
+        assert_eq!(LAST_MOCK_RESOURCE_ID.load(Ordering::SeqCst), tracked_xid);
+        assert!(!window_teardown_started());
 
-        let ret = dispatch_x_error_test(
-            10, // BadAccess
-            tracked_xid,
-            window_teardown_started(),
-            tracked_xid,
-            Some(mock_previous_handler),
-        );
-        assert_eq!(ret, 42, "ordinary error must be forwarded while minimized");
-        assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), 2);
-        assert_eq!(LAST_MOCK_ERROR_CODE.load(Ordering::SeqCst), 10);
-
-        // 2. Restore event (GDK_WINDOW_STATE = 32 with iconified cleared, state 0)
-        assert!(
-            !gdk_event_starts_teardown(32, 0),
-            "restore must not arm teardown"
-        );
-        assert!(
-            !gdk_event_starts_teardown_for_window(32, 0, true),
-            "restore must not arm teardown"
-        );
-        assert!(
-            !window_teardown_started(),
-            "window_teardown must remain false when restored"
-        );
-
-        // Errors must still NOT be suppressed after restore
-        let ret = dispatch_x_error_test(
-            X_BAD_DRAWABLE,
-            aux_xid,
-            window_teardown_started(),
-            tracked_xid,
-            Some(mock_previous_handler),
-        );
+        let ret = inject_x_error(X_BAD_DRAWABLE, tracked_xid);
         assert_eq!(
             ret, 42,
-            "BadDrawable on aux must be forwarded after restore"
+            "BadDrawable on the tracked window must be forwarded during minimize"
         );
+        assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), 2);
+
+        let ret = inject_x_error(X_BAD_WINDOW, aux_xid);
+        assert_eq!(ret, 42, "BadWindow on an unrelated xid must be forwarded");
         assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), 3);
+        assert_eq!(LAST_MOCK_RESOURCE_ID.load(Ordering::SeqCst), aux_xid);
+
+        let ret = inject_x_error(10, tracked_xid);
+        assert_eq!(ret, 42, "ordinary error must be forwarded while minimized");
+        assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), 4);
+        clear_gdk_dispatch();
+        assert_eq!(current_gdk_event(), -1);
+
+        // Restore also changes the iconified bit. new_window_state drops it.
+        dispatch_tracked_gdk_event(GDK_WINDOW_STATE, GDK_WINDOW_STATE_ICONIFIED, 0);
+        assert!(!window_teardown_started(), "restore must not arm teardown");
+        let ret = inject_x_error(X_BAD_DRAWABLE, tracked_xid);
+        assert_eq!(
+            ret, 42,
+            "BadDrawable on the tracked window must be forwarded during restore"
+        );
+        assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), 5);
+        assert!(!window_teardown_started());
+        clear_gdk_dispatch();
+    }
+
+    #[test]
+    fn regression_stale_window_state_does_not_attribute_a_later_x_error() {
+        let _lock = test_lock();
+        let tracked_xid = 0x200003;
+        reset_x11(tracked_xid);
+        dispatch_tracked_gdk_event(
+            GDK_WINDOW_STATE,
+            GDK_WINDOW_STATE_ICONIFIED,
+            GDK_WINDOW_STATE_ICONIFIED,
+        );
+        // Production `on_gdk_event` clears this when `gtk_main_do_event` returns.
+        clear_gdk_dispatch();
+        assert_eq!(current_gdk_event(), -1);
+        assert_eq!(gdk_window_state_snapshot(), (0, 0));
+        assert!(!window_teardown_started());
+
+        let ret = inject_x_error(X_BAD_WINDOW, tracked_xid);
+        assert_eq!(
+            ret, 42,
+            "a BadWindow after minimize dispatch must not be swallowed"
+        );
+        assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), 1);
+        assert!(!window_teardown_started());
     }
 
     #[test]
     fn regression_cancelled_close_disarms_teardown_and_preserves_error_handling() {
+        let _lock = test_lock();
         let tracked_xid = 0x200003;
-        let aux_xid = 0x999999;
-        set_tracked_window_xid(tracked_xid);
-
-        // Tentatively armed or in-progress
-        note_window_teardown();
+        reset_x11(tracked_xid);
+        let tracked = 0x10 as *mut std::ffi::c_void;
+        let other = 0x11 as *mut std::ffi::c_void;
+        assert!(delete_event_targets_tracked(tracked, tracked));
+        assert!(!delete_event_targets_tracked(tracked, other));
+        assert!(delete_event_targets_tracked(std::ptr::null_mut(), other));
+        // Production delete-event hook arms teardown only for the tracked widget.
+        if delete_event_targets_tracked(tracked, tracked) {
+            note_window_teardown();
+        }
         assert!(window_teardown_started());
-
-        // Cancelled close (e.g. child failed to stop or user cancelled)
+        // StayOpen: close was not confirmed.
         disarm_window_teardown();
         assert!(
             !window_teardown_started(),
             "teardown must be disarmed on cancelled close"
         );
 
-        // Errors must NOT be suppressed after a cancelled close
-        MOCK_PREVIOUS_CALLED.store(0, Ordering::SeqCst);
-        let ret = dispatch_x_error_test(
-            X_BAD_WINDOW,
-            aux_xid,
-            window_teardown_started(),
-            tracked_xid,
-            Some(mock_previous_handler),
-        );
+        let ret = inject_x_error(X_BAD_WINDOW, tracked_xid);
         assert_eq!(
             ret, 42,
-            "BadWindow on aux must be forwarded after cancelled close"
+            "BadWindow on the tracked window must be forwarded after cancelled close"
         );
         assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), 1);
-
-        let ret = dispatch_x_error_test(
-            10, // BadAccess
-            tracked_xid,
-            window_teardown_started(),
-            tracked_xid,
-            Some(mock_previous_handler),
-        );
+        let ret = inject_x_error(X_BAD_DRAWABLE, 0x999999);
+        assert_eq!(ret, 42, "unrelated BadDrawable must be forwarded");
+        assert_eq!(LAST_MOCK_RESOURCE_ID.load(Ordering::SeqCst), 0x999999);
+        let ret = inject_x_error(10, tracked_xid);
         assert_eq!(
             ret, 42,
-            "ordinary error on tracked window must be forwarded after cancelled close"
+            "ordinary error must be forwarded after cancelled close"
         );
-        assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), 2);
+        assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), 3);
     }
 
     #[test]
     fn regression_auxiliary_window_events_do_not_arm_teardown() {
-        disarm_window_teardown();
+        let _lock = test_lock();
         let tracked_xid = 0x200003;
         let aux_xid = 0x999999;
-        set_tracked_window_xid(tracked_xid);
+        reset_x11(tracked_xid);
 
-        // Auxiliary window GDK_DESTROY, GDK_DELETE, and GDK_WINDOW_STATE
         assert!(
-            !gdk_event_starts_teardown_for_window(1, 0, false),
+            !gdk_event_starts_teardown_for_window(GDK_DESTROY, 0, false),
             "auxiliary window destroy must not arm teardown"
         );
         assert!(
             !gdk_event_starts_teardown_for_window(0, 0, false),
             "auxiliary window delete must not arm teardown"
         );
-        assert!(
-            !gdk_event_starts_teardown_for_window(32, 2, false),
-            "auxiliary window iconify must not arm teardown"
+        note_gdk_dispatch(
+            GDK_WINDOW_STATE,
+            GDK_WINDOW_STATE_ICONIFIED,
+            GDK_WINDOW_STATE_ICONIFIED,
         );
-        assert!(
-            !window_teardown_started(),
-            "window_teardown must remain false on aux events"
-        );
-
-        // Errors on auxiliary window must be forwarded to previous handler
-        MOCK_PREVIOUS_CALLED.store(0, Ordering::SeqCst);
-        let ret = dispatch_x_error_test(
-            X_BAD_WINDOW,
-            aux_xid,
-            window_teardown_started(),
-            tracked_xid,
-            Some(mock_previous_handler),
-        );
+        // Auxiliary window: production does not call note_window_teardown.
+        assert!(!gdk_event_starts_teardown_for_window(
+            GDK_WINDOW_STATE,
+            GDK_WINDOW_STATE_ICONIFIED,
+            false
+        ));
+        assert!(!window_teardown_started());
+        let ret = inject_x_error(X_BAD_WINDOW, aux_xid);
         assert_eq!(ret, 42, "auxiliary window error must be forwarded");
         assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), 1);
         assert_eq!(LAST_MOCK_RESOURCE_ID.load(Ordering::SeqCst), aux_xid);
+        clear_gdk_dispatch();
     }
 
     #[test]
     fn regression_ordinary_non_teardown_x_errors_forwarded_to_previous_handler() {
-        disarm_window_teardown();
+        let _lock = test_lock();
         let tracked_xid = 0x200003;
-        set_tracked_window_xid(tracked_xid);
+        reset_x11(tracked_xid);
 
-        // Outside teardown, every error code is passed to previous handler
         let codes = [1u8, 2, 3, 8, 9, 10, 11, 255];
         let mut expected_calls = 0;
-        MOCK_PREVIOUS_CALLED.store(0, Ordering::SeqCst);
-
         for &code in &codes {
-            let ret = dispatch_x_error_test(
-                code,
-                tracked_xid,
-                false,
-                tracked_xid,
-                Some(mock_previous_handler),
-            );
+            let ret = inject_x_error(code, tracked_xid);
             expected_calls += 1;
             assert_eq!(
                 ret, 42,
@@ -1075,16 +1735,10 @@ mod tests {
             assert_eq!(LAST_MOCK_ERROR_CODE.load(Ordering::SeqCst), code);
         }
 
-        // During active teardown, non-drawable/non-window codes are STILL forwarded
+        note_window_teardown();
         let non_drawable_codes = [1u8, 2, 8, 10, 11, 255];
         for &code in &non_drawable_codes {
-            let ret = dispatch_x_error_test(
-                code,
-                tracked_xid,
-                true,
-                tracked_xid,
-                Some(mock_previous_handler),
-            );
+            let ret = inject_x_error(code, tracked_xid);
             expected_calls += 1;
             assert_eq!(
                 ret, 42,
@@ -1093,70 +1747,430 @@ mod tests {
             assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), expected_calls);
             assert_eq!(LAST_MOCK_ERROR_CODE.load(Ordering::SeqCst), code);
         }
-    }
-
-    #[test]
-    fn regression_real_close_arms_teardown_and_suppresses_only_drawable_errors() {
-        let tracked_xid = 0x200003;
-        set_tracked_window_xid(tracked_xid);
-
-        // Real close approved or tracked window GDK_DESTROY
-        assert!(gdk_event_starts_teardown_for_window(1, 0, true));
-        note_window_teardown();
-        assert!(window_teardown_started());
-
-        MOCK_PREVIOUS_CALLED.store(0, Ordering::SeqCst);
-
-        // BadWindow (3) is suppressed during teardown (mock handler not called, returns 0)
-        let ret = dispatch_x_error_test(
-            X_BAD_WINDOW,
-            tracked_xid,
-            window_teardown_started(),
-            tracked_xid,
-            Some(mock_previous_handler),
-        );
-        assert_eq!(ret, 0, "BadWindow must be suppressed during teardown");
-        assert_eq!(
-            MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst),
-            0,
-            "previous handler must not be called"
-        );
-
-        // BadDrawable (9) is suppressed during teardown (mock handler not called, returns 0)
-        let ret = dispatch_x_error_test(
-            X_BAD_DRAWABLE,
-            tracked_xid,
-            window_teardown_started(),
-            tracked_xid,
-            Some(mock_previous_handler),
-        );
-        assert_eq!(ret, 0, "BadDrawable must be suppressed during teardown");
-        assert_eq!(
-            MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst),
-            0,
-            "previous handler must not be called"
-        );
-
-        // Any other code (e.g. BadAccess 10) is STILL forwarded
-        let ret = dispatch_x_error_test(
-            10,
-            tracked_xid,
-            window_teardown_started(),
-            tracked_xid,
-            Some(mock_previous_handler),
-        );
-        assert_eq!(ret, 42, "BadAccess must be forwarded even during teardown");
-        assert_eq!(
-            MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst),
-            1,
-            "previous handler must be called for non-drawable errors"
-        );
-
         disarm_window_teardown();
     }
 
     #[test]
+    fn regression_real_close_suppresses_only_tracked_drawable_errors() {
+        let _lock = test_lock();
+        let tracked_xid = 0x200003;
+        let aux_xid = 0x999999;
+        reset_x11(tracked_xid);
+
+        // Approved close (AllowExit) and tracked GDK_DESTROY both arm teardown.
+        dispatch_tracked_gdk_event(GDK_DESTROY, 0, 0);
+        assert!(window_teardown_started());
+        note_window_teardown();
+
+        let ret = inject_x_error(X_BAD_WINDOW, tracked_xid);
+        assert_eq!(ret, 0, "BadWindow on the tracked xid must be suppressed");
+        assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), 0);
+
+        let ret = inject_x_error(X_BAD_DRAWABLE, tracked_xid);
+        assert_eq!(ret, 0, "BadDrawable on the tracked xid must be suppressed");
+        assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), 0);
+
+        let ret = inject_x_error(X_BAD_WINDOW, aux_xid);
+        assert_eq!(
+            ret, 42,
+            "BadWindow on an unrelated xid must be forwarded during teardown"
+        );
+        assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), 1);
+        assert_eq!(LAST_MOCK_RESOURCE_ID.load(Ordering::SeqCst), aux_xid);
+
+        let ret = inject_x_error(X_BAD_DRAWABLE, aux_xid);
+        assert_eq!(ret, 42, "BadDrawable on an unrelated xid must be forwarded");
+        assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), 2);
+
+        let ret = inject_x_error(10, tracked_xid);
+        assert_eq!(ret, 42, "BadAccess must be forwarded even during teardown");
+        assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), 3);
+        clear_gdk_dispatch();
+        disarm_window_teardown();
+    }
+
+    #[test]
+    fn regression_returning_previous_handler_does_not_stop_the_owned_child() {
+        let _lock = test_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let hold = script(
+            tmp.path(),
+            "hold.sh",
+            "#!/bin/sh\ntrap 'exit 0' TERM\nwhile true; do sleep 0.05; done\n",
+        );
+        let other = script(
+            tmp.path(),
+            "bystander.sh",
+            "#!/bin/sh\nwhile true; do sleep 0.05; done\n",
+        );
+        let mut bystander = Command::new(&other).spawn().unwrap();
+        let bystander_pid = bystander.id();
+        let _bystander_guard = KillPid(bystander_pid);
+        let supervisor = Supervisor::new(Duration::from_millis(400));
+        supervisor
+            .start(&hold, Path::new("/tmp/unused.toml"))
+            .unwrap();
+        let owned = supervisor.status().pid.expect("owned pid");
+        let _owned_guard = KillPid(owned);
+        assert_eq!(OWNED_PID.load(Ordering::SeqCst), owned as i32);
+        assert!(process_alive(owned));
+        assert!(process_alive(bystander_pid));
+
+        let tracked_xid = 0x200003;
+        reset_x11(tracked_xid);
+        dispatch_tracked_gdk_event(
+            GDK_WINDOW_STATE,
+            GDK_WINDOW_STATE_ICONIFIED,
+            GDK_WINDOW_STATE_ICONIFIED,
+        );
+        let ret = inject_x_error(X_BAD_DRAWABLE, tracked_xid);
+        assert_eq!(ret, 42, "returning handler result must be propagated");
+        assert_eq!(MOCK_PREVIOUS_CALLED.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            OWNED_PID.load(Ordering::SeqCst),
+            owned as i32,
+            "a returning previous handler cleared the owned pid"
+        );
+        assert!(
+            process_alive(owned),
+            "a returning previous handler stopped the owned child"
+        );
+        assert!(process_alive(bystander_pid));
+        assert_eq!(supervisor.status().state, ProcessState::Running);
+        clear_gdk_dispatch();
+        assert!(!window_teardown_started());
+
+        // No previous handler still must not stop the child.
+        let mut event = XErrorEvent {
+            type_: 0,
+            display: std::ptr::null_mut(),
+            resourceid: tracked_xid,
+            serial: 1,
+            error_code: X_BAD_WINDOW,
+            request_code: 14,
+            minor_code: 0,
+        };
+        let ret = unsafe { dispatch_x_error(std::ptr::null_mut(), &mut event, None) };
+        assert_eq!(ret, 0);
+        assert!(process_alive(owned));
+        assert_eq!(OWNED_PID.load(Ordering::SeqCst), owned as i32);
+
+        supervisor.stop().unwrap();
+        assert!(!process_alive(owned));
+        assert!(process_alive(bystander_pid));
+        let _ = bystander.kill();
+        let _ = bystander.wait();
+    }
+
+    #[test]
+    fn parent_death_reaper_stops_owned_child_and_spares_bystander() {
+        let _lock = test_lock();
+        assert_eq!(STOP_GRACE, Duration::from_secs(10));
+        assert!(parse_reaper_args(std::iter::empty()).unwrap().is_none());
+        assert!(parse_reaper_args(["--other".to_string()].into_iter())
+            .unwrap()
+            .is_none());
+        assert!(parse_reaper_args(
+            ["--parent-death-reaper".to_string(), "1".to_string()].into_iter()
+        )
+        .is_err());
+        assert!(parse_reaper_args(
+            [
+                "--parent-death-reaper".to_string(),
+                "2".to_string(),
+                "10".to_string(),
+                "2".to_string(),
+                "11".to_string(),
+            ]
+            .into_iter()
+        )
+        .is_err());
+
+        let tmp = tempfile::tempdir().unwrap();
+        let hold = script(
+            tmp.path(),
+            "hold.sh",
+            "#!/bin/sh\ntrap 'exit 0' TERM\nwhile true; do sleep 0.05; done\n",
+        );
+        let other = script(
+            tmp.path(),
+            "bystander.sh",
+            "#!/bin/sh\nwhile true; do sleep 0.05; done\n",
+        );
+        let (mut parent, owned_pid) = spawn_parent_child(&hold, &tmp.path().join("child.pid"));
+        let parent_pid = parent.id() as i32;
+        let parent_started = process_start_ticks(parent_pid).expect("parent start");
+        let owned_started = process_start_ticks(owned_pid).expect("owned start");
+        let mut bystander = spawn_session(&other);
+        let bystander_pid = bystander.id();
+        let _bystander_guard = KillPid(bystander_pid);
+        let _owned_guard = KillPid(owned_pid as u32);
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        let early = thread::spawn(move || {
+            parent_death_reaper_loop(
+                parent_pid,
+                parent_started,
+                owned_pid,
+                owned_started,
+                Duration::from_millis(200),
+                &flag,
+            );
+        });
+        thread::sleep(Duration::from_millis(120));
+        assert!(
+            process_alive(owned_pid as u32),
+            "reaper stopped a live parent's child"
+        );
+        assert!(process_alive(bystander_pid));
+        stop.store(true, Ordering::SeqCst);
+        early.join().unwrap();
+        assert!(process_alive(owned_pid as u32));
+        assert!(process_alive(bystander_pid));
+
+        let flag = Arc::new(AtomicBool::new(false));
+        let watcher = thread::spawn(move || {
+            parent_death_reaper_loop(
+                parent_pid,
+                parent_started,
+                owned_pid,
+                owned_started,
+                Duration::from_millis(400),
+                &flag,
+            );
+        });
+        unsafe {
+            libc::kill(parent_pid, libc::SIGKILL);
+        }
+        let _ = parent.wait();
+        watcher.join().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while process_alive(owned_pid as u32) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !owned_still_running(owned_pid, owned_started),
+            "parent death did not stop the owned child"
+        );
+        assert!(
+            process_alive(bystander_pid),
+            "parent-death reaper killed a bystander"
+        );
+        let _ = bystander.kill();
+        let _ = bystander.wait();
+    }
+
+    #[test]
+    fn reaper_refuses_unrelated_pid_reused_ticks_and_non_leader() {
+        let _lock = test_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let hold = script(
+            tmp.path(),
+            "hold.sh",
+            "#!/bin/sh\ntrap 'exit 0' TERM\nwhile true; do sleep 0.05; done\n",
+        );
+        let mut non_leader = Command::new(&hold).spawn().unwrap();
+        let non_leader_pid = non_leader.id() as i32;
+        let non_leader_started = process_start_ticks(non_leader_pid).expect("non leader start");
+        let began = Instant::now();
+        let outcome =
+            signal_owned_group(non_leader_pid, non_leader_started, Duration::from_secs(10));
+        assert_eq!(outcome, OwnedSignal::NotOwned);
+        assert!(
+            began.elapsed() < Duration::from_millis(500),
+            "a non-leader was treated as an owned group and the grace was consumed"
+        );
+        assert!(process_alive(non_leader.id()));
+        let _ = non_leader.kill();
+        let _ = non_leader.wait();
+
+        let mut leader = spawn_session(&hold);
+        let leader_pid = leader.id() as i32;
+        let leader_started = process_start_ticks(leader_pid).expect("leader start");
+        let outcome = signal_owned_group(
+            leader_pid,
+            leader_started.wrapping_add(1),
+            Duration::from_secs(10),
+        );
+        assert_eq!(outcome, OwnedSignal::NotOwned);
+        assert!(
+            process_alive(leader.id()),
+            "wrong start time signaled a live group"
+        );
+
+        let (mut parent, owned_pid) = spawn_parent_child(&hold, &tmp.path().join("child.pid"));
+        let _owned_guard = KillPid(owned_pid as u32);
+        let parent_pid = parent.id() as i32;
+        let parent_started = process_start_ticks(parent_pid).expect("parent start");
+        let by_started = leader_started;
+        let by_pid = leader_pid;
+        let stop = AtomicBool::new(false);
+        parent_death_reaper_loop(
+            parent_pid,
+            parent_started,
+            by_pid,
+            by_started,
+            Duration::from_millis(200),
+            &stop,
+        );
+        assert!(
+            process_alive(leader.id()),
+            "reaper adopted a group leader that is not the parent's child"
+        );
+        unsafe {
+            libc::kill(parent_pid, libc::SIGKILL);
+        }
+        let _ = parent.wait();
+        assert!(process_alive(leader.id()));
+        let _ = leader.kill();
+        let _ = leader.wait();
+    }
+
+    #[test]
+    fn reaper_adopts_child_already_orphaned_by_parent_death() {
+        let _lock = test_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let hold = script(
+            tmp.path(),
+            "hold.sh",
+            "#!/bin/sh\ntrap 'exit 0' TERM\nwhile true; do sleep 0.05; done\n",
+        );
+        let (mut parent, owned_pid) = spawn_parent_child(&hold, &tmp.path().join("child.pid"));
+        let _owned_guard = KillPid(owned_pid as u32);
+        let parent_pid = parent.id() as i32;
+        let parent_started = process_start_ticks(parent_pid).expect("parent start");
+        let owned_started = process_start_ticks(owned_pid).expect("owned start");
+        let mut bystander = spawn_session(&script(
+            tmp.path(),
+            "bystander.sh",
+            "#!/bin/sh\nwhile true; do sleep 0.05; done\n",
+        ));
+        let bystander_pid = bystander.id();
+        unsafe {
+            libc::kill(parent_pid, libc::SIGKILL);
+        }
+        let _ = parent.wait();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let ppid = proc_stat(owned_pid).map(|stat| stat.ppid);
+            if ppid == Some(1) || Instant::now() >= deadline {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            proc_stat(owned_pid).map(|stat| stat.ppid),
+            Some(1),
+            "orphaned child was not reparented to init"
+        );
+        let stop = AtomicBool::new(false);
+        parent_death_reaper_loop(
+            parent_pid,
+            parent_started,
+            owned_pid,
+            owned_started,
+            Duration::from_millis(400),
+            &stop,
+        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while process_alive(owned_pid as u32) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !owned_still_running(owned_pid, owned_started),
+            "a child orphaned before the reaper loop started was left running"
+        );
+        assert!(process_alive(bystander_pid));
+        let _ = bystander.kill();
+        let _ = bystander.wait();
+    }
+
+    #[test]
+    fn reaper_spawn_failure_stops_the_child_and_restart_replaces_the_reaper() {
+        let _lock = test_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let hold = script(
+            tmp.path(),
+            "hold.sh",
+            "#!/bin/sh\ntrap 'exit 0' TERM\nwhile true; do sleep 0.05; done\n",
+        );
+        let log = tmp.path().join("reaper.log");
+        let reaper = script(
+            tmp.path(),
+            "reaper.py",
+            &format!(
+                "#!/usr/bin/env python3\nimport os, signal, sys, time\nsignal.pthread_sigmask(signal.SIG_UNBLOCK, {{signal.SIGTERM}})\nlog = {log:?}\ndef stop(_s, _f):\n    open(log, 'a').write('term %d\\n' % os.getpid())\n    sys.exit(0)\nsignal.signal(signal.SIGTERM, stop)\nopen(log, 'a').write('start %d %s\\n' % (os.getpid(), ' '.join(sys.argv[1:])))\nwhile True:\n    time.sleep(0.05)\n"
+            ),
+        );
+        let _guard = ReaperTestGuard::enable(tmp.path().join("missing-reaper"));
+        let supervisor = Supervisor::new(Duration::from_millis(300));
+        let err = supervisor
+            .start(&hold, Path::new("/tmp/unused.toml"))
+            .unwrap_err();
+        assert!(err.contains("parent-death reaper was not started"), "{err}");
+        assert!(err.contains("The child was stopped"), "{err}");
+        let status = supervisor.status();
+        assert_ne!(status.state, ProcessState::Running);
+        assert!(status.pid.is_none());
+        assert_eq!(OWNED_PID.load(Ordering::SeqCst), 0);
+        assert!(!cmdline_contains(hold.to_str().unwrap()));
+
+        drop(_guard);
+        let _guard = ReaperTestGuard::enable(reaper);
+        let supervisor = Supervisor::new(Duration::from_millis(400));
+        supervisor
+            .start(&hold, Path::new("/tmp/unused.toml"))
+            .unwrap();
+        let first = supervisor.status().pid.expect("first pid");
+        let _first_guard = KillPid(first);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if fs::read_to_string(&log)
+                .unwrap_or_default()
+                .contains(&format!(" {first} "))
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "reaper did not record the first child"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        supervisor.stop().unwrap();
+        assert!(!process_alive(first));
+        let after_stop = fs::read_to_string(&log).unwrap();
+        assert!(after_stop.contains("term "), "{after_stop}");
+
+        supervisor
+            .start(&hold, Path::new("/tmp/unused.toml"))
+            .unwrap();
+        let second = supervisor.status().pid.expect("second pid");
+        let _second_guard = KillPid(second);
+        assert_ne!(first, second);
+        assert!(process_alive(second));
+        assert!(!process_alive(first));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let text = fs::read_to_string(&log).unwrap_or_default();
+            if text.matches("start ").count() >= 2 && text.contains(&format!(" {second} ")) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "restart did not arm a new reaper: {text}"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        supervisor.stop().unwrap();
+        assert!(!process_alive(second));
+        assert_eq!(supervisor.status().state, ProcessState::Exited);
+    }
+
+    #[test]
     fn spawn_failure_does_not_look_running() {
+        let _lock = test_lock();
         let supervisor = Supervisor::new(Duration::from_millis(200));
         let err = supervisor
             .start(
@@ -1172,6 +2186,7 @@ mod tests {
 
     #[test]
     fn duplicate_start_and_stop_do_not_touch_an_unrelated_pid() {
+        let _lock = test_lock();
         let tmp = tempfile::tempdir().unwrap();
         let hold = script(
             tmp.path(),
@@ -1209,6 +2224,7 @@ mod tests {
 
     #[test]
     fn child_exit_is_recorded_and_sigkill_fallback_is_bounded() {
+        let _lock = test_lock();
         let tmp = tempfile::tempdir().unwrap();
         let quick = script(tmp.path(), "exit.sh", "#!/bin/sh\nexit 7\n");
         let supervisor = Supervisor::new(Duration::from_millis(200));
@@ -1246,6 +2262,7 @@ mod tests {
 
     #[test]
     fn argv_preserves_spaces_and_logs_are_redacted() {
+        let _lock = test_lock();
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("a b");
         fs::create_dir(&dir).unwrap();
@@ -1287,6 +2304,7 @@ mod tests {
 
     #[test]
     fn data_directory_marker_survives_restart_of_the_owned_process() {
+        let _lock = test_lock();
         let tmp = tempfile::tempdir().unwrap();
         let data = tmp.path().join("chain data");
         fs::create_dir(&data).unwrap();
@@ -1312,6 +2330,7 @@ mod tests {
 
     #[test]
     fn signal_failure_keeps_ownership_and_spares_a_bystander() {
+        let _lock = test_lock();
         let tmp = tempfile::tempdir().unwrap();
         let hold = script(
             tmp.path(),
@@ -1363,6 +2382,7 @@ mod tests {
 
     #[test]
     fn kill_wait_timeout_keeps_the_child_and_spares_a_bystander() {
+        let _lock = test_lock();
         let tmp = tempfile::tempdir().unwrap();
         let hold = script(
             tmp.path(),
@@ -1413,6 +2433,7 @@ mod tests {
 
     #[test]
     fn exit_hook_waits_out_grace_checks_ownership_and_reports_signal_failure() {
+        let _lock = test_lock();
         assert_eq!(STOP_GRACE, Duration::from_secs(10));
         assert!(STOP_GRACE > Duration::from_millis(200));
 
@@ -1517,9 +2538,9 @@ mod tests {
             "escalation killed a bystander"
         );
 
-        let held = spawn_session(&stubborn);
+        let mut held = spawn_session(&stubborn);
         let held_pid = held.id() as i32;
-        let _held_guard = KillPid(held.id());
+        let held_guard = KillPid(held.id());
         let held_started = process_start_ticks(held_pid).expect("held start");
         EXIT_SIGNAL_FAILS.store(true, Ordering::SeqCst);
         let began = Instant::now();
@@ -1537,6 +2558,8 @@ mod tests {
             process_alive(bystander_pid),
             "a failed signal hit a bystander"
         );
+        drop(held_guard);
+        let _ = held.wait();
         let _ = bystander.kill();
         let _ = bystander.wait();
     }
