@@ -12,6 +12,8 @@ Start stays disabled until Check setup accepts the exact executable, config, and
 
 The app does not search `PATH`, download a binary, build one on start, or generate a config. It does not embed public seeds and it does not rewrite the file you selected.
 
+This package is the supervisor and the read-only monitor. It does not include `kovanica-node`, a genesis file, a key, or a chain database. Type the absolute path of a node executable you already have, the absolute path of a config file you already wrote, and the absolute data directory named in that file. Check setup accepts or refuses those three paths. Start stays off until the check matches the paths still in the form. This window does not search `PATH`, download or build a node, rewrite the config, or unset `KOVANICA_*`. If any `KOVANICA_*` name is set in the environment that launched this window, Check setup refuses and does not show the value. Unset those names outside this app and leave the file as it is.
+
 ## Node CLI this was checked against
 
 Reviewed source: `KovanicaDAG/kovanica` `74045cf3e27a70569c32af35aec24ada5dd9ff79`.
@@ -114,7 +116,22 @@ The default Cargo feature is `gui`, which links Tauri and therefore GTK/WebKit. 
 cargo build --manifest-path src-tauri/Cargo.toml --features gui
 ```
 
-That needs `pkg-config` and the GTK/WebKit development packages (`libgtk-3-dev`, `libwebkit2gtk-4.1-dev`, and their dependencies). On this Debian 12 check those were GTK 3.24.38, glib 2.74.6, and WebKitGTK 4.1 2.50.6. `cargo build --manifest-path src-tauri/Cargo.toml --locked --features gui --bins` produced the debug binary. A `.deb` package was not built. The window was exercised on Xvfb `:99`, not on a physical display. The first installable package is not built yet; the plan is [docs/linux-node-package.md](../docs/linux-node-package.md).
+That needs `pkg-config` and the GTK/WebKit development packages (`libgtk-3-dev`, `libwebkit2gtk-4.1-dev`, and their dependencies). On this Debian 12 check those were GTK 3.24.38, glib 2.74.6, and WebKitGTK 4.1 2.50.6. `cargo build --manifest-path src-tauri/Cargo.toml --locked --features gui --bins` produced the debug binary. A `.deb` package was not built in that session. The window was exercised on Xvfb `:99`, not on a physical display. The packaging plan is [docs/linux-node-package.md](../docs/linux-node-package.md). The Debian 12 package command is below.
+
+## Debian 12 package
+
+Debian 12 (bookworm) amd64 only. This is not an Ubuntu package and not a generic Linux package. It contains the supervisor and the read-only monitor. It does not contain `kovanica-node`, a genesis file, a key, or a chain database.
+
+From `node-desktop/`, on Debian 12 amd64, with the build packages listed in the plan:
+
+```text
+npm run tauri -- build --bundles deb --ci -f gui -- --locked
+bash scripts/check-deb.sh
+```
+
+The deb file name comes from the product name, so it contains a space. Quote it. `scripts/check-deb.sh` finds the single file under `src-tauri/target/release/bundle/deb/`, checks the control fields and payload, and prints SHA-256 checksums. It does not install or upload the package.
+
+There is no copyright file in the package. `Cargo.toml` says `GPL-3.0-or-later`. That missing file means this package is not distribution-ready. The control Maintainer is `Kovanica Team <KovanicaDAG@protonmail.com>`. There are no maintainer scripts. Upgrade and remove replace or delete only the files the package installed. They do not signal a process and they do not delete a config or a data directory you selected.
 
 `console-desktop` still path-depends on `../../../crates` and is not fixed here.
 

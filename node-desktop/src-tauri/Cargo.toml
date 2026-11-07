@@ -2,7 +2,7 @@
 name = "kovanica-node-desktop"
 version = "0.2.0"
 description = "Kovanica Node Linux supervisor (milestone 1)"
-authors = ["Kovanica Team"]
+authors = ["Kovanica Team <KovanicaDAG@protonmail.com>"]
 edition = "2021"
 license = "GPL-3.0-or-later"
 
