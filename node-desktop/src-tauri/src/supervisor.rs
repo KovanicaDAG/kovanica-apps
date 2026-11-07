@@ -247,6 +247,10 @@ static OWNED_START_TICKS: AtomicU64 = AtomicU64::new(0);
 /// false so `start` does not re-exec the test harness.
 static PARENT_DEATH_REAPER_ENABLED: AtomicBool = AtomicBool::new(false);
 static REAPER_CHILD: Mutex<Option<Child>> = Mutex::new(None);
+/// Test-only replacement for `current_exe`. Production arming re-execs this
+/// binary; tests point it at a script so the test harness is not re-execed.
+#[cfg(test)]
+static REAPER_EXE_OVERRIDE: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
 /// Test-only. When set, the exit hook's `kill` calls fail and touch no pid.
 #[cfg(test)]
 static EXIT_SIGNAL_FAILS: AtomicBool = AtomicBool::new(false);
@@ -411,7 +415,15 @@ impl Supervisor {
             inner.last_error = None;
             inner.generation = inner.generation.wrapping_add(1);
         }
-        publish_owned(pid);
+        if let Err(err) = publish_owned(pid) {
+            let stop_result = self.stop();
+            return match stop_result {
+                Ok(()) => Err(format!("{err} The child was stopped.")),
+                Err(stop_err) => Err(format!(
+                    "{err} The child was not confirmed stopped: {stop_err}"
+                )),
+            };
+        }
         {
             let mut logs = self.logs.lock().expect("log lock");
             logs.clear();
@@ -663,23 +675,26 @@ pub fn arm_exit_hook() {
     });
 }
 
-fn publish_owned(pid: u32) {
+fn publish_owned(pid: u32) -> Result<(), String> {
     if pid == 0 || pid > i32::MAX as u32 {
         clear_owned_publication();
         disarm_parent_death_reaper();
-        return;
+        return Err("refusing to publish a child pid of 0".into());
     }
-    match process_start_ticks(pid as i32) {
-        Some(ticks) => {
-            OWNED_START_TICKS.store(ticks, Ordering::SeqCst);
-            OWNED_PID.store(pid as i32, Ordering::SeqCst);
-            arm_parent_death_reaper(pid as i32, ticks);
-        }
-        None => {
-            clear_owned_publication();
-            disarm_parent_death_reaper();
-        }
+    let Some(ticks) = process_start_ticks(pid as i32) else {
+        clear_owned_publication();
+        disarm_parent_death_reaper();
+        return Err(
+            "could not read the child start time, so it was not published to the reaper".into(),
+        );
+    };
+    OWNED_START_TICKS.store(ticks, Ordering::SeqCst);
+    OWNED_PID.store(pid as i32, Ordering::SeqCst);
+    if let Err(err) = arm_parent_death_reaper(pid as i32, ticks) {
+        clear_owned_publication();
+        return Err(err);
     }
+    Ok(())
 }
 
 fn clear_owned_publication() {
@@ -698,7 +713,9 @@ pub fn enable_parent_death_reaper() {
 }
 
 /// Arguments after the program name. `Ok(None)` means this is not a reaper.
-pub fn parse_reaper_args<I>(args: I) -> Result<Option<(i32, i32, u64)>, String>
+///
+/// Order: parent pid, parent start ticks, node pid, node start ticks.
+pub fn parse_reaper_args<I>(args: I) -> Result<Option<(i32, u64, i32, u64)>, String>
 where
     I: IntoIterator<Item = String>,
 {
@@ -714,69 +731,117 @@ where
         .ok_or("parent-death reaper is missing the parent pid")?
         .parse::<i32>()
         .map_err(|_| "parent-death reaper parent pid is not an integer")?;
+    let parent_started = args
+        .next()
+        .ok_or("parent-death reaper is missing the parent start time")?
+        .parse::<u64>()
+        .map_err(|_| "parent-death reaper parent start time is not an integer")?;
     let node_pid = args
         .next()
         .ok_or("parent-death reaper is missing the node pid")?
         .parse::<i32>()
         .map_err(|_| "parent-death reaper node pid is not an integer")?;
-    let start_ticks = args
+    let node_started = args
         .next()
-        .ok_or("parent-death reaper is missing the start time")?
+        .ok_or("parent-death reaper is missing the node start time")?
         .parse::<u64>()
-        .map_err(|_| "parent-death reaper start time is not an integer")?;
-    if parent_pid <= 0 || node_pid <= 0 || start_ticks == 0 || parent_pid == node_pid {
+        .map_err(|_| "parent-death reaper node start time is not an integer")?;
+    if parent_pid <= 0
+        || node_pid <= 0
+        || parent_started == 0
+        || node_started == 0
+        || parent_pid == node_pid
+    {
         return Err(
-            "parent-death reaper requires a positive parent pid, a different positive node pid, and a non-zero start time"
+            "parent-death reaper requires a positive parent pid, a different positive node pid, and non-zero start times"
                 .into(),
         );
     }
-    Ok(Some((parent_pid, node_pid, start_ticks)))
+    Ok(Some((parent_pid, parent_started, node_pid, node_started)))
+}
+
+/// True only for the process this supervisor just spawned.
+///
+/// While the parent is still the process whose start time was published, the
+/// node must be its direct child. If that parent has already exited, the node
+/// must have been reparented to init (ppid 1). In both cases it must be a
+/// process-group leader (`pgrp == pid`, which `setsid` establishes) and the
+/// node's start time must be the published one, not earlier than the parent's.
+/// A reused pid fails the start-time check. A bystander whose parent is some
+/// other live process fails the ppid check. This is the process relationship
+/// recorded at arm time, not a guess about window state.
+fn adopt_reaper_target(
+    parent_pid: i32,
+    parent_started: u64,
+    node_pid: i32,
+    node_started: u64,
+) -> bool {
+    let Some(node) = proc_stat(node_pid) else {
+        return false;
+    };
+    if node.start_ticks != node_started
+        || node.pgrp != node_pid
+        || node.start_ticks < parent_started
+    {
+        return false;
+    }
+    match proc_stat(parent_pid) {
+        Some(parent) if parent.start_ticks == parent_started => node.ppid == parent_pid,
+        // Published parent is gone. Only the orphaned group leader is in scope.
+        _ => node.ppid == 1,
+    }
 }
 
 /// Block until `parent_pid` exits or `stop` is set.
 ///
-/// On parent exit, runs the same bounded group stop as the `atexit` hook.
-/// `stop` means this reaper was disarmed while the parent is still alive
-/// (the node was reaped, or a newer reaper replaced this one). The node is
-/// not signaled in that case.
+/// The owned child is signaled only after [`adopt_reaper_target`] accepts it.
+/// On parent exit, runs the same bounded group stop as the `atexit` hook
+/// (`grace`, then SIGKILL only if that same start time is still running).
+/// `stop` means this reaper was disarmed while it had not yet decided the
+/// parent was dead (normal Stop, or a newer reaper replaced this one). The
+/// node is not signaled in that case. `grace` is [`STOP_GRACE`] on the
+/// production path.
 pub fn parent_death_reaper_loop(
     parent_pid: i32,
+    parent_started: u64,
     node_pid: i32,
-    start_ticks: u64,
+    node_started: u64,
     grace: Duration,
     stop: &AtomicBool,
 ) {
-    let fd = pidfd_open(parent_pid);
-    struct CloseFd(Option<libc::c_int>);
-    impl Drop for CloseFd {
-        fn drop(&mut self) {
-            if let Some(fd) = self.0 {
-                unsafe {
-                    libc::close(fd);
-                }
-            }
-        }
+    if !adopt_reaper_target(parent_pid, parent_started, node_pid, node_started) {
+        let msg = format!(
+            "node parent-death reaper: not adopting pid {node_pid}; it is not a group-leader child of parent {parent_pid} with the published start times; not signaling\n"
+        );
+        write_stderr(&msg);
+        return;
     }
-    let _fd = CloseFd(fd);
+    let watch = watch_parent(parent_pid, parent_started);
+    if matches!(watch, ParentWatch::AlreadyGone) {
+        stop_adopted_child(parent_pid, node_pid, node_started, grace);
+        return;
+    }
     loop {
         if stop.load(Ordering::SeqCst) {
-            let msg = format!(
-                "node parent-death reaper: disarmed while parent {parent_pid} is alive; not signaling {node_pid}\n"
-            );
+            let msg = format!("node parent-death reaper: disarmed; not signaling {node_pid}\n");
             write_stderr(&msg);
             return;
         }
-        if parent_has_exited(parent_pid, fd) {
-            let msg = format!(
-                "node parent-death reaper: parent {parent_pid} exited; stopping owned pid {node_pid}\n"
-            );
-            write_stderr(&msg);
-            let outcome = signal_owned_group(node_pid, start_ticks, grace);
-            let msg = format!("node parent-death reaper: stop outcome {outcome:?}\n");
-            write_stderr(&msg);
+        if parent_has_exited(parent_pid, parent_started, &watch) {
+            stop_adopted_child(parent_pid, node_pid, node_started, grace);
             return;
         }
     }
+}
+
+fn stop_adopted_child(parent_pid: i32, node_pid: i32, node_started: u64, grace: Duration) {
+    let msg = format!(
+        "node parent-death reaper: parent {parent_pid} exited; stopping owned pid {node_pid}\n"
+    );
+    write_stderr(&msg);
+    let outcome = signal_owned_group(node_pid, node_started, grace);
+    let msg = format!("node parent-death reaper: stop outcome {outcome:?}\n");
+    write_stderr(&msg);
 }
 
 /// Run the reaper when `args` starts with `--parent-death-reaper`.
@@ -784,7 +849,8 @@ pub fn parent_death_reaper_loop(
 /// Returns `None` when this process is the normal GUI. Otherwise the process
 /// should exit with the returned code. Installs a SIGTERM handler only on
 /// that path so a unit test of the loop does not steal the test process's
-/// signals. SIGTERM while the parent is alive disarms the reaper.
+/// signals. SIGTERM while the parent is alive disarms the reaper. The stop
+/// grace is [`STOP_GRACE`] (10 seconds), the same interval as Stop.
 pub fn run_parent_death_reaper_from_args<I>(args: I) -> Option<i32>
 where
     I: IntoIterator<Item = String>,
@@ -796,7 +862,7 @@ where
             write_stderr(&msg);
             Some(2)
         }
-        Ok(Some((parent_pid, node_pid, start_ticks))) => {
+        Ok(Some((parent_pid, parent_started, node_pid, node_started))) => {
             unsafe {
                 libc::signal(libc::SIGHUP, libc::SIG_IGN);
                 libc::signal(
@@ -807,8 +873,9 @@ where
             unblock_sigterm();
             parent_death_reaper_loop(
                 parent_pid,
+                parent_started,
                 node_pid,
-                start_ticks,
+                node_started,
                 STOP_GRACE,
                 &REAPER_PROCESS_STOP,
             );
@@ -844,48 +911,92 @@ fn pidfd_open(pid: i32) -> Option<libc::c_int> {
     }
 }
 
-fn parent_has_exited(parent_pid: i32, pidfd: Option<libc::c_int>) -> bool {
-    if let Some(fd) = pidfd {
+enum ParentWatch {
+    /// pidfd refers to the parent whose start time was published.
+    Fd(libc::c_int),
+    /// pidfd was not available. Identity is re-checked via start time.
+    PollProc,
+    /// The published parent is already gone or its pid was reused.
+    AlreadyGone,
+}
+
+impl Drop for ParentWatch {
+    fn drop(&mut self) {
+        if let ParentWatch::Fd(fd) = self {
+            unsafe {
+                libc::close(*fd);
+            }
+        }
+    }
+}
+
+fn watch_parent(parent_pid: i32, parent_started: u64) -> ParentWatch {
+    match pidfd_open(parent_pid) {
+        Some(fd) => match process_start_ticks(parent_pid) {
+            Some(ticks) if ticks == parent_started => ParentWatch::Fd(fd),
+            _ => {
+                unsafe {
+                    libc::close(fd);
+                }
+                ParentWatch::AlreadyGone
+            }
+        },
+        None => match process_start_ticks(parent_pid) {
+            Some(ticks) if ticks == parent_started => ParentWatch::PollProc,
+            _ => ParentWatch::AlreadyGone,
+        },
+    }
+}
+
+fn parent_has_exited(parent_pid: i32, parent_started: u64, watch: &ParentWatch) -> bool {
+    if let ParentWatch::Fd(fd) = watch {
         let mut pollfd = libc::pollfd {
-            fd,
+            fd: *fd,
             events: libc::POLLIN,
             revents: 0,
         };
         let rc = unsafe { libc::poll(&mut pollfd, 1, 50) };
         if rc > 0 {
+            // Readable pidfd means this process, not a later occupant of the pid, exited.
             return pollfd.revents & (libc::POLLIN | libc::POLLERR | libc::POLLHUP) != 0;
         }
         if rc == 0 {
             return false;
         }
-        // EINTR or a broken pidfd: fall through to /proc.
     }
-    let alive = std::fs::metadata(format!("/proc/{parent_pid}")).is_ok();
-    if alive {
-        thread::sleep(Duration::from_millis(50));
-        false
-    } else {
-        true
+    match process_start_ticks(parent_pid) {
+        Some(ticks) if ticks == parent_started => {
+            thread::sleep(Duration::from_millis(50));
+            false
+        }
+        _ => true,
     }
 }
 
-fn arm_parent_death_reaper(node_pid: i32, start_ticks: u64) {
+fn reaper_executable() -> std::io::Result<std::path::PathBuf> {
+    #[cfg(test)]
+    if let Some(path) = REAPER_EXE_OVERRIDE.lock().expect("reaper exe").clone() {
+        return Ok(path);
+    }
+    std::env::current_exe()
+}
+
+fn arm_parent_death_reaper(node_pid: i32, start_ticks: u64) -> Result<(), String> {
     if !PARENT_DEATH_REAPER_ENABLED.load(Ordering::SeqCst) {
-        return;
+        return Ok(());
     }
     disarm_parent_death_reaper();
-    let exe = match std::env::current_exe() {
-        Ok(exe) => exe,
-        Err(err) => {
-            eprintln!("node parent-death reaper was not started: {err}");
-            return;
-        }
-    };
+    let exe = reaper_executable()
+        .map_err(|err| format!("node parent-death reaper was not started: {err}"))?;
     let parent_pid = std::process::id();
+    let parent_started = process_start_ticks(parent_pid as i32).ok_or(
+        "node parent-death reaper was not started: the supervisor start time could not be read",
+    )?;
     let mut command = Command::new(exe);
     command
         .arg("--parent-death-reaper")
         .arg(parent_pid.to_string())
+        .arg(parent_started.to_string())
         .arg(node_pid.to_string())
         .arg(start_ticks.to_string())
         .stdin(Stdio::null())
@@ -916,10 +1027,9 @@ fn arm_parent_death_reaper(node_pid: i32, start_ticks: u64) {
             let pid = child.id();
             eprintln!("node parent-death reaper pid {pid} watching owned pid {node_pid}");
             *REAPER_CHILD.lock().expect("reaper child") = Some(child);
+            Ok(())
         }
-        Err(err) => {
-            eprintln!("node parent-death reaper was not started: {err}");
-        }
+        Err(err) => Err(format!("node parent-death reaper was not started: {err}")),
     }
 }
 
@@ -958,6 +1068,8 @@ fn process_start_ticks(pid: i32) -> Option<u64> {
 
 struct ProcStat {
     state: u8,
+    ppid: i32,
+    pgrp: i32,
     start_ticks: u64,
 }
 
@@ -967,11 +1079,19 @@ fn proc_stat(pid: i32) -> Option<ProcStat> {
     }
     let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let rest = text.rsplit_once(')')?.1;
-    // Tokens after `comm` begin at field 3 (state). Field 22 is starttime.
+    // Tokens after `comm` begin at field 3 (state). Field 4 is ppid, 5 is pgrp,
+    // 22 is starttime.
     let mut fields = rest.split_whitespace();
     let state = *fields.next()?.as_bytes().first()?;
-    let start_ticks = fields.nth(18)?.parse().ok()?;
-    Some(ProcStat { state, start_ticks })
+    let ppid = fields.next()?.parse().ok()?;
+    let pgrp = fields.next()?.parse().ok()?;
+    let start_ticks = fields.nth(16)?.parse().ok()?;
+    Some(ProcStat {
+        state,
+        ppid,
+        pgrp,
+        start_ticks,
+    })
 }
 
 /// Same start time, and not a zombie. A zombie keeps its pid and start time
@@ -1013,7 +1133,8 @@ fn signal_owned_group(pid: i32, started: u64, grace: Duration) -> OwnedSignal {
             OwnedSignal::NotOwned
         };
     }
-    match send_group_signal(pid, libc::SIGTERM) {
+    match send_group_signal(pid, started, libc::SIGTERM) {
+        GroupSignal::NotOwned => return OwnedSignal::NotOwned,
         GroupSignal::Gone => {
             if !owned_still_running(pid, started) {
                 return if process_start_ticks(pid) == Some(started) {
@@ -1046,7 +1167,8 @@ fn signal_owned_group(pid: i32, started: u64, grace: Duration) -> OwnedSignal {
     if !owned_still_running(pid, started) {
         return OwnedSignal::Exited;
     }
-    match send_group_signal(pid, libc::SIGKILL) {
+    match send_group_signal(pid, started, libc::SIGKILL) {
+        GroupSignal::NotOwned => OwnedSignal::NotOwned,
         GroupSignal::Sent => OwnedSignal::Killed,
         GroupSignal::Gone => {
             if owned_still_running(pid, started) {
@@ -1066,15 +1188,41 @@ enum GroupSignal {
     Sent,
     Gone,
     Failed,
+    /// Identity did not match. Nothing was signaled.
+    NotOwned,
 }
 
-fn send_group_signal(pid: i32, signal: i32) -> GroupSignal {
+/// Signal `pid`'s process group only while a pidfd holds that exact task and
+/// `/proc` still shows the published start time and `pgrp == pid`.
+///
+/// Holding the pidfd keeps the pid from being reused across the `kill`. A
+/// process that is not its own group leader is refused: `kill(-pid)` would
+/// name some other group whose id happens to equal this pid.
+fn send_group_signal(pid: i32, started: u64, signal: i32) -> GroupSignal {
     if pid <= 0 {
         return GroupSignal::Failed;
     }
     #[cfg(test)]
     if EXIT_SIGNAL_FAILS.load(Ordering::SeqCst) {
         return GroupSignal::Failed;
+    }
+    let Some(fd) = pidfd_open(pid) else {
+        return GroupSignal::Gone;
+    };
+    struct CloseFd(libc::c_int);
+    impl Drop for CloseFd {
+        fn drop(&mut self) {
+            unsafe {
+                libc::close(self.0);
+            }
+        }
+    }
+    let _hold = CloseFd(fd);
+    let Some(stat) = proc_stat(pid) else {
+        return GroupSignal::Gone;
+    };
+    if stat.start_ticks != started || stat.pgrp != pid {
+        return GroupSignal::NotOwned;
     }
     let rc = unsafe { libc::kill(-pid, signal) };
     if rc == 0 {
@@ -1197,6 +1345,72 @@ mod tests {
             });
         }
         command.spawn().unwrap()
+    }
+
+    /// Parent process whose forked child is in its own session. The child's
+    /// ppid is the parent, which is what the reaper requires before it adopts.
+    fn spawn_parent_child(binary: &Path, pid_file: &Path) -> (Child, i32) {
+        let mut parent = Command::new("python3")
+            .arg("-c")
+            .arg(
+                "import os, sys, time\nbinary, pid_file = sys.argv[1], sys.argv[2]\npid = os.fork()\nif pid == 0:\n    os.setsid()\n    os.execv(binary, [binary])\nopen(pid_file, 'w').write(str(pid))\nwhile True:\n    time.sleep(0.05)\n",
+            )
+            .arg(binary)
+            .arg(pid_file)
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Ok(text) = fs::read_to_string(pid_file) {
+                if let Ok(pid) = text.trim().parse::<i32>() {
+                    if proc_stat(pid)
+                        .is_some_and(|stat| stat.ppid == parent.id() as i32 && stat.pgrp == pid)
+                    {
+                        return (parent, pid);
+                    }
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "parent did not publish a group-leader child"
+            );
+            match parent.try_wait() {
+                Ok(Some(_)) => panic!("parent exited before publishing a child"),
+                Ok(None) => thread::sleep(Duration::from_millis(20)),
+                Err(_) => panic!("could not wait for the parent"),
+            }
+        }
+    }
+
+    fn cmdline_contains(needle: &str) -> bool {
+        let Ok(entries) = fs::read_dir("/proc") else {
+            return false;
+        };
+        for entry in entries.flatten() {
+            let Ok(bytes) = fs::read(entry.path().join("cmdline")) else {
+                continue;
+            };
+            if String::from_utf8_lossy(&bytes).contains(needle) {
+                return true;
+            }
+        }
+        false
+    }
+
+    struct ReaperTestGuard;
+    impl ReaperTestGuard {
+        fn enable(exe: PathBuf) -> Self {
+            *REAPER_EXE_OVERRIDE.lock().expect("reaper exe") = Some(exe);
+            PARENT_DEATH_REAPER_ENABLED.store(true, Ordering::SeqCst);
+            ReaperTestGuard
+        }
+    }
+    impl Drop for ReaperTestGuard {
+        fn drop(&mut self) {
+            PARENT_DEATH_REAPER_ENABLED.store(false, Ordering::SeqCst);
+            *REAPER_EXE_OVERRIDE.lock().expect("reaper exe") = None;
+            disarm_parent_death_reaper();
+        }
     }
 
     static PROCESS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -1651,12 +1865,24 @@ mod tests {
     #[test]
     fn parent_death_reaper_stops_owned_child_and_spares_bystander() {
         let _lock = test_lock();
+        assert_eq!(STOP_GRACE, Duration::from_secs(10));
         assert!(parse_reaper_args(std::iter::empty()).unwrap().is_none());
         assert!(parse_reaper_args(["--other".to_string()].into_iter())
             .unwrap()
             .is_none());
         assert!(parse_reaper_args(
             ["--parent-death-reaper".to_string(), "1".to_string()].into_iter()
+        )
+        .is_err());
+        assert!(parse_reaper_args(
+            [
+                "--parent-death-reaper".to_string(),
+                "2".to_string(),
+                "10".to_string(),
+                "2".to_string(),
+                "11".to_string(),
+            ]
+            .into_iter()
         )
         .is_err());
 
@@ -1671,42 +1897,45 @@ mod tests {
             "bystander.sh",
             "#!/bin/sh\nwhile true; do sleep 0.05; done\n",
         );
-        let mut parent = Command::new("sleep").arg("30").spawn().unwrap();
+        let (mut parent, owned_pid) = spawn_parent_child(&hold, &tmp.path().join("child.pid"));
         let parent_pid = parent.id() as i32;
-        let mut bystander = Command::new(&other).spawn().unwrap();
+        let parent_started = process_start_ticks(parent_pid).expect("parent start");
+        let owned_started = process_start_ticks(owned_pid).expect("owned start");
+        let mut bystander = spawn_session(&other);
         let bystander_pid = bystander.id();
         let _bystander_guard = KillPid(bystander_pid);
-        let mut owned = spawn_session(&hold);
-        let owned_pid = owned.id() as i32;
-        let _owned_guard = KillPid(owned.id());
-        let started = process_start_ticks(owned_pid).expect("owned start");
+        let _owned_guard = KillPid(owned_pid as u32);
+
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);
         let early = thread::spawn(move || {
             parent_death_reaper_loop(
                 parent_pid,
+                parent_started,
                 owned_pid,
-                started,
+                owned_started,
                 Duration::from_millis(200),
                 &flag,
             );
         });
         thread::sleep(Duration::from_millis(120));
         assert!(
-            process_alive(owned.id()),
+            process_alive(owned_pid as u32),
             "reaper stopped a live parent's child"
         );
         assert!(process_alive(bystander_pid));
         stop.store(true, Ordering::SeqCst);
         early.join().unwrap();
-        assert!(process_alive(owned.id()));
+        assert!(process_alive(owned_pid as u32));
+        assert!(process_alive(bystander_pid));
 
         let flag = Arc::new(AtomicBool::new(false));
         let watcher = thread::spawn(move || {
             parent_death_reaper_loop(
                 parent_pid,
+                parent_started,
                 owned_pid,
-                started,
+                owned_started,
                 Duration::from_millis(400),
                 &flag,
             );
@@ -1717,20 +1946,226 @@ mod tests {
         let _ = parent.wait();
         watcher.join().unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
-        while process_alive(owned.id()) && Instant::now() < deadline {
+        while process_alive(owned_pid as u32) && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(20));
         }
         assert!(
-            !owned_still_running(owned_pid, started),
+            !owned_still_running(owned_pid, owned_started),
             "parent death did not stop the owned child"
         );
         assert!(
             process_alive(bystander_pid),
             "parent-death reaper killed a bystander"
         );
-        let _ = owned.wait();
         let _ = bystander.kill();
         let _ = bystander.wait();
+    }
+
+    #[test]
+    fn reaper_refuses_unrelated_pid_reused_ticks_and_non_leader() {
+        let _lock = test_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let hold = script(
+            tmp.path(),
+            "hold.sh",
+            "#!/bin/sh\ntrap 'exit 0' TERM\nwhile true; do sleep 0.05; done\n",
+        );
+        let mut non_leader = Command::new(&hold).spawn().unwrap();
+        let non_leader_pid = non_leader.id() as i32;
+        let non_leader_started = process_start_ticks(non_leader_pid).expect("non leader start");
+        let began = Instant::now();
+        let outcome =
+            signal_owned_group(non_leader_pid, non_leader_started, Duration::from_secs(10));
+        assert_eq!(outcome, OwnedSignal::NotOwned);
+        assert!(
+            began.elapsed() < Duration::from_millis(500),
+            "a non-leader was treated as an owned group and the grace was consumed"
+        );
+        assert!(process_alive(non_leader.id()));
+        let _ = non_leader.kill();
+        let _ = non_leader.wait();
+
+        let mut leader = spawn_session(&hold);
+        let leader_pid = leader.id() as i32;
+        let leader_started = process_start_ticks(leader_pid).expect("leader start");
+        let outcome = signal_owned_group(
+            leader_pid,
+            leader_started.wrapping_add(1),
+            Duration::from_secs(10),
+        );
+        assert_eq!(outcome, OwnedSignal::NotOwned);
+        assert!(
+            process_alive(leader.id()),
+            "wrong start time signaled a live group"
+        );
+
+        let (mut parent, owned_pid) = spawn_parent_child(&hold, &tmp.path().join("child.pid"));
+        let _owned_guard = KillPid(owned_pid as u32);
+        let parent_pid = parent.id() as i32;
+        let parent_started = process_start_ticks(parent_pid).expect("parent start");
+        let by_started = leader_started;
+        let by_pid = leader_pid;
+        let stop = AtomicBool::new(false);
+        parent_death_reaper_loop(
+            parent_pid,
+            parent_started,
+            by_pid,
+            by_started,
+            Duration::from_millis(200),
+            &stop,
+        );
+        assert!(
+            process_alive(leader.id()),
+            "reaper adopted a group leader that is not the parent's child"
+        );
+        unsafe {
+            libc::kill(parent_pid, libc::SIGKILL);
+        }
+        let _ = parent.wait();
+        assert!(process_alive(leader.id()));
+        let _ = leader.kill();
+        let _ = leader.wait();
+    }
+
+    #[test]
+    fn reaper_adopts_child_already_orphaned_by_parent_death() {
+        let _lock = test_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let hold = script(
+            tmp.path(),
+            "hold.sh",
+            "#!/bin/sh\ntrap 'exit 0' TERM\nwhile true; do sleep 0.05; done\n",
+        );
+        let (mut parent, owned_pid) = spawn_parent_child(&hold, &tmp.path().join("child.pid"));
+        let _owned_guard = KillPid(owned_pid as u32);
+        let parent_pid = parent.id() as i32;
+        let parent_started = process_start_ticks(parent_pid).expect("parent start");
+        let owned_started = process_start_ticks(owned_pid).expect("owned start");
+        let mut bystander = spawn_session(&script(
+            tmp.path(),
+            "bystander.sh",
+            "#!/bin/sh\nwhile true; do sleep 0.05; done\n",
+        ));
+        let bystander_pid = bystander.id();
+        unsafe {
+            libc::kill(parent_pid, libc::SIGKILL);
+        }
+        let _ = parent.wait();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let ppid = proc_stat(owned_pid).map(|stat| stat.ppid);
+            if ppid == Some(1) || Instant::now() >= deadline {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            proc_stat(owned_pid).map(|stat| stat.ppid),
+            Some(1),
+            "orphaned child was not reparented to init"
+        );
+        let stop = AtomicBool::new(false);
+        parent_death_reaper_loop(
+            parent_pid,
+            parent_started,
+            owned_pid,
+            owned_started,
+            Duration::from_millis(400),
+            &stop,
+        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while process_alive(owned_pid as u32) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !owned_still_running(owned_pid, owned_started),
+            "a child orphaned before the reaper loop started was left running"
+        );
+        assert!(process_alive(bystander_pid));
+        let _ = bystander.kill();
+        let _ = bystander.wait();
+    }
+
+    #[test]
+    fn reaper_spawn_failure_stops_the_child_and_restart_replaces_the_reaper() {
+        let _lock = test_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let hold = script(
+            tmp.path(),
+            "hold.sh",
+            "#!/bin/sh\ntrap 'exit 0' TERM\nwhile true; do sleep 0.05; done\n",
+        );
+        let log = tmp.path().join("reaper.log");
+        let reaper = script(
+            tmp.path(),
+            "reaper.py",
+            &format!(
+                "#!/usr/bin/env python3\nimport os, signal, sys, time\nsignal.pthread_sigmask(signal.SIG_UNBLOCK, {{signal.SIGTERM}})\nlog = {log:?}\ndef stop(_s, _f):\n    open(log, 'a').write('term %d\\n' % os.getpid())\n    sys.exit(0)\nsignal.signal(signal.SIGTERM, stop)\nopen(log, 'a').write('start %d %s\\n' % (os.getpid(), ' '.join(sys.argv[1:])))\nwhile True:\n    time.sleep(0.05)\n"
+            ),
+        );
+        let _guard = ReaperTestGuard::enable(tmp.path().join("missing-reaper"));
+        let supervisor = Supervisor::new(Duration::from_millis(300));
+        let err = supervisor
+            .start(&hold, Path::new("/tmp/unused.toml"))
+            .unwrap_err();
+        assert!(err.contains("parent-death reaper was not started"), "{err}");
+        assert!(err.contains("The child was stopped"), "{err}");
+        let status = supervisor.status();
+        assert_ne!(status.state, ProcessState::Running);
+        assert!(status.pid.is_none());
+        assert_eq!(OWNED_PID.load(Ordering::SeqCst), 0);
+        assert!(!cmdline_contains(hold.to_str().unwrap()));
+
+        drop(_guard);
+        let _guard = ReaperTestGuard::enable(reaper);
+        let supervisor = Supervisor::new(Duration::from_millis(400));
+        supervisor
+            .start(&hold, Path::new("/tmp/unused.toml"))
+            .unwrap();
+        let first = supervisor.status().pid.expect("first pid");
+        let _first_guard = KillPid(first);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if fs::read_to_string(&log)
+                .unwrap_or_default()
+                .contains(&format!(" {first} "))
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "reaper did not record the first child"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        supervisor.stop().unwrap();
+        assert!(!process_alive(first));
+        let after_stop = fs::read_to_string(&log).unwrap();
+        assert!(after_stop.contains("term "), "{after_stop}");
+
+        supervisor
+            .start(&hold, Path::new("/tmp/unused.toml"))
+            .unwrap();
+        let second = supervisor.status().pid.expect("second pid");
+        let _second_guard = KillPid(second);
+        assert_ne!(first, second);
+        assert!(process_alive(second));
+        assert!(!process_alive(first));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let text = fs::read_to_string(&log).unwrap_or_default();
+            if text.matches("start ").count() >= 2 && text.contains(&format!(" {second} ")) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "restart did not arm a new reaper: {text}"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        supervisor.stop().unwrap();
+        assert!(!process_alive(second));
+        assert_eq!(supervisor.status().state, ProcessState::Exited);
     }
 
     #[test]
