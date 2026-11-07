@@ -4,7 +4,7 @@ Local supervisor for one `kovanica-node` process, with a read-only loopback moni
 
 ## What you select
 
-Start stays disabled until Check setup accepts three absolute paths:
+Start stays disabled until Check setup accepts the exact executable, config, and data directory still in the form. Editing those fields, or starting another check, drops an in-flight result. A late success cannot approve a different combination, and a late failure cannot clear a newer acceptance. The three paths are:
 
 - the `kovanica-node` executable
 - a config file you already wrote
@@ -61,7 +61,7 @@ While the owned process is running and the window is visible, the app polls loop
 
 Shapes follow the reviewed L1 handlers (`status`, `peer_count`, camelCase `committedHeight`, `peerId`, `reportedTipRound`). The TypeScript SDK is not used. Missing or wrong-typed fields stay `unknown`. A failed read is `unavailable` or unreachable, not `0` and not synced. An explicit zero is shown as zero. `catchingUp: false` only means the node did not report an active catch-up.
 
-Polling does not overlap, times out after 3 seconds, and backs off up to 30 seconds after failures. A hidden window pauses new reads. A response that finishes after Stop or a new Start is dropped.
+Polling does not overlap, times out after 3 seconds, and backs off up to 30 seconds after failures. A hidden window pauses new reads. A response that finishes after Stop or a new Start is dropped. The window says the monitor is not observed until a read succeeds, unreachable when a read fails with no prior success, and stale when a later failure keeps the last values. A missing timestamp is not shown as current. Missing numbers stay unknown or unavailable, not zero. Displayed height is not treated as executed-state recovery. Each snapshot carries `process.statusSeq` and `monitorSeq`; a slower response does not replace a newer process or monitor observation.
 
 There is no remote admin endpoint and no transaction submission.
 
