@@ -8,13 +8,17 @@ use std::time::Instant;
 use kovanica_node_desktop::monitor::fetch_monitor;
 use kovanica_node_desktop::policy::{check_setup, kovanica_env_names};
 use kovanica_node_desktop::session::{BeginPoll, Session, Snapshot, WindowClose};
-use kovanica_node_desktop::supervisor::{arm_exit_hook, ProcessState, STOP_GRACE};
+use kovanica_node_desktop::supervisor::{
+    arm_exit_hook, gdk_event_starts_teardown, ignore_x_error_during_teardown, note_window_teardown,
+    window_teardown_started, ProcessState, STOP_GRACE,
+};
 use tauri::Manager;
 use tauri::State;
 
-/// BadDrawable while WebKit tears down a window on Xvfb. The default GDK
-/// handler can `exit` before `CloseRequested`. Ignore only that error so the
-/// owned-child stop can run. Other errors still go to the previous handler.
+/// X errors are reported asynchronously. On this GTK 3 build an untrapped
+/// error is logged and then `_exit(1)`, which skips `atexit` and leaks the
+/// owned child. Ignore BadWindow and BadDrawable only after delete-event.
+/// Every other code is passed to the handler that was installed before this one.
 #[repr(C)]
 #[allow(dead_code)]
 struct XErrorEvent {
@@ -34,29 +38,151 @@ extern "C" {
     fn XSetErrorHandler(handler: Option<XErrorHandler>) -> Option<XErrorHandler>;
 }
 
-static mut PREVIOUS_X_ERROR: Option<XErrorHandler> = None;
+#[link(name = "gdk-3")]
+extern "C" {
+    fn gdk_event_handler_set(
+        func: Option<unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void)>,
+        data: *mut std::ffi::c_void,
+        notify: Option<unsafe extern "C" fn(*mut std::ffi::c_void)>,
+    );
+}
 
-unsafe extern "C" fn ignore_teardown_drawable(
-    display: *mut std::ffi::c_void,
-    event: *mut XErrorEvent,
-) -> i32 {
+fn write_stderr(msg: &str) {
+    unsafe {
+        libc::write(2, msg.as_ptr() as *const libc::c_void, msg.len());
+    }
+}
+
+/// `GdkEventType` of the event currently inside `gtk_main_do_event`.
+static CURRENT_GDK_EVENT: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+static LAST_WINDOW_STATE_CHANGED: std::sync::atomic::AtomicI32 =
+    std::sync::atomic::AtomicI32::new(0);
+static LAST_WINDOW_STATE_NEW: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+#[repr(C)]
+#[allow(dead_code)]
+struct GdkEventWindowState {
+    event_type: i32,
+    window: *mut std::ffi::c_void,
+    send_event: i8,
+    changed_mask: i32,
+    new_window_state: i32,
+}
+
+const GDK_WINDOW_STATE: i32 = 32;
+
+unsafe extern "C" fn on_gdk_event(event: *mut std::ffi::c_void, _data: *mut std::ffi::c_void) {
+    let kind = if event.is_null() {
+        -1
+    } else {
+        unsafe { *(event as *const i32) }
+    };
+    CURRENT_GDK_EVENT.store(kind, std::sync::atomic::Ordering::SeqCst);
+    let mut new_state = 0;
+    if kind == GDK_WINDOW_STATE && !event.is_null() {
+        let state = unsafe { &*(event as *const GdkEventWindowState) };
+        new_state = state.new_window_state;
+        LAST_WINDOW_STATE_CHANGED.store(state.changed_mask, std::sync::atomic::Ordering::SeqCst);
+        LAST_WINDOW_STATE_NEW.store(new_state, std::sync::atomic::Ordering::SeqCst);
+    }
+    if gdk_event_starts_teardown(kind, new_state) {
+        note_window_teardown();
+        write_stderr(&format!(
+            "node teardown armed event={kind} new_state={new_state}\n"
+        ));
+    }
+    unsafe { gtk_main_do_event(event) };
+}
+
+#[link(name = "gobject-2.0")]
+extern "C" {
+    fn g_signal_lookup(name: *const libc::c_char, itype: usize) -> u32;
+    fn g_signal_add_emission_hook(
+        signal_id: u32,
+        detail: u32,
+        hook: unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            u32,
+            *const std::ffi::c_void,
+            *mut std::ffi::c_void,
+        ) -> i32,
+        data: *mut std::ffi::c_void,
+        destroy: Option<unsafe extern "C" fn(*mut std::ffi::c_void)>,
+    ) -> u64;
+}
+
+#[link(name = "gtk-3")]
+extern "C" {
+    fn gtk_widget_get_type() -> usize;
+    fn gtk_main_do_event(event: *mut std::ffi::c_void);
+}
+
+static PREVIOUS_X_ERROR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+unsafe extern "C" fn on_x_error(display: *mut std::ffi::c_void, event: *mut XErrorEvent) -> i32 {
     let code = unsafe { (*event).error_code };
-    // 3 BadWindow, 9 BadDrawable. Both show up while the webview window is destroyed.
-    if code == 3 || code == 9 {
+    let teardown = window_teardown_started();
+    if ignore_x_error_during_teardown(code, teardown) {
+        write_stderr(&format!("node x error {code} ignored during teardown\n"));
         return 0;
     }
-    unsafe {
-        if let Some(previous) = PREVIOUS_X_ERROR {
-            return previous(display, event);
-        }
+    if code == 3 || code == 9 {
+        let request = unsafe { (*event).request_code };
+        let gdk_event = CURRENT_GDK_EVENT.load(std::sync::atomic::Ordering::SeqCst);
+        let changed = LAST_WINDOW_STATE_CHANGED.load(std::sync::atomic::Ordering::SeqCst);
+        let new_state = LAST_WINDOW_STATE_NEW.load(std::sync::atomic::Ordering::SeqCst);
+        write_stderr(&format!(
+            "node x error {code} passed to toolkit teardown={teardown} request={request} gdk_event={gdk_event} window_changed={changed} window_new={new_state}\n"
+        ));
     }
+    let previous = PREVIOUS_X_ERROR.load(std::sync::atomic::Ordering::SeqCst);
+    if previous != 0 {
+        let previous: XErrorHandler = unsafe { std::mem::transmute(previous) };
+        return unsafe { previous(display, event) };
+    }
+    write_stderr(&format!("node x error {code} had no previous handler\n"));
     0
 }
 
+unsafe extern "C" fn on_delete_event_emission(
+    _hint: *mut std::ffi::c_void,
+    _n_params: u32,
+    _params: *const std::ffi::c_void,
+    _data: *mut std::ffi::c_void,
+) -> i32 {
+    note_window_teardown();
+    let msg = "node teardown armed\n";
+    unsafe {
+        libc::write(2, msg.as_ptr() as *const libc::c_void, msg.len());
+    }
+    1
+}
+
 fn install_x_error_guard() {
+    const _: () = assert!(std::mem::offset_of!(GdkEventWindowState, changed_mask) == 20);
+    const _: () = assert!(std::mem::offset_of!(GdkEventWindowState, new_window_state) == 24);
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| unsafe {
-        PREVIOUS_X_ERROR = XSetErrorHandler(Some(ignore_teardown_drawable));
+        let previous = XSetErrorHandler(Some(on_x_error));
+        PREVIOUS_X_ERROR.store(
+            previous.map(|handler| handler as usize).unwrap_or(0),
+            std::sync::atomic::Ordering::SeqCst,
+        );
+        gdk_event_handler_set(Some(on_gdk_event), std::ptr::null_mut(), None);
+        let name = std::ffi::CString::new("delete-event").unwrap();
+        let signal_id = g_signal_lookup(name.as_ptr(), gtk_widget_get_type());
+        if signal_id == 0 {
+            let msg = "node delete-event signal was not found\n";
+            libc::write(2, msg.as_ptr() as *const libc::c_void, msg.len());
+            return;
+        }
+        g_signal_add_emission_hook(
+            signal_id,
+            0,
+            on_delete_event_emission,
+            std::ptr::null_mut(),
+            None,
+        );
     });
 }
 
@@ -147,7 +273,11 @@ async fn monitor_refresh(state: State<'_, Session>) -> Result<Snapshot, String> 
 
 /// Stop the owned child. Stay open when that stop is not confirmed.
 fn apply_close(state: &Session) -> WindowClose {
-    eprintln!("node close requested");
+    let msg = "node close requested\n";
+    unsafe {
+        libc::write(2, msg.as_ptr() as *const libc::c_void, msg.len());
+    }
+    note_window_teardown();
     let decision = state.close_window();
     if let WindowClose::StayOpen { error } = &decision {
         eprintln!("node stop was not confirmed; keeping the window open: {error}");

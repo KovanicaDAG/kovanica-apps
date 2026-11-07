@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -25,6 +25,44 @@ pub const LOG_LINES: usize = 200;
 pub const STOP_GRACE: Duration = Duration::from_secs(10);
 pub const KILL_WAIT: Duration = Duration::from_secs(2);
 
+/// X11 `BadWindow` and `BadDrawable`. GDK's handler for an untrapped error
+/// calls `_exit(1)` on this build, which does not run `atexit`.
+pub const X_BAD_WINDOW: u8 = 3;
+pub const X_BAD_DRAWABLE: u8 = 9;
+
+static WINDOW_TEARDOWN: AtomicBool = AtomicBool::new(false);
+
+/// Record that a window delete has started. Later `BadWindow` / `BadDrawable`
+/// may be ignored. The flag is never cleared: close is one-way.
+pub fn note_window_teardown() {
+    WINDOW_TEARDOWN.store(true, Ordering::SeqCst);
+}
+
+pub fn window_teardown_started() -> bool {
+    WINDOW_TEARDOWN.load(Ordering::SeqCst)
+}
+
+/// Ignore only BadWindow and BadDrawable, and only after delete has started.
+/// Every other code is the toolkit's, including these two before delete.
+pub fn ignore_x_error_during_teardown(error_code: u8, teardown: bool) -> bool {
+    teardown && (error_code == X_BAD_WINDOW || error_code == X_BAD_DRAWABLE)
+}
+
+/// GDK event types that mean the toplevel is going away.
+/// `GDK_DELETE` = 0, `GDK_DESTROY` = 1, `GDK_WINDOW_STATE` = 32.
+/// Withdrawn is bit 0 and iconified is bit 1. On this WebKitGTK build,
+/// `XGetGeometry` hits a dead drawable inside the iconified window-state
+/// event, before `delete-event`. A focus-only change (bit 7) is not teardown.
+pub fn gdk_event_starts_teardown(event_type: i32, new_window_state: i32) -> bool {
+    const GDK_DELETE: i32 = 0;
+    const GDK_DESTROY: i32 = 1;
+    const GDK_WINDOW_STATE: i32 = 32;
+    const WITHDRAWN_OR_ICONIFIED: i32 = 1 | 2;
+    event_type == GDK_DELETE
+        || event_type == GDK_DESTROY
+        || (event_type == GDK_WINDOW_STATE && new_window_state & WITHDRAWN_OR_ICONIFIED != 0)
+}
+
 /// The one child this process owns, for the C `atexit` hook.
 ///
 /// A GTK/WebKit `exit` during window teardown does not run Rust destructors
@@ -32,6 +70,9 @@ pub const KILL_WAIT: Duration = Duration::from_secs(2);
 /// and only if `/proc` still shows the same start time.
 static OWNED_PID: AtomicI32 = AtomicI32::new(0);
 static OWNED_START_TICKS: AtomicU64 = AtomicU64::new(0);
+/// Test-only. When set, the exit hook's `kill` calls fail and touch no pid.
+#[cfg(test)]
+static EXIT_SIGNAL_FAILS: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy)]
 enum SignalMode {
@@ -465,13 +506,34 @@ fn clear_owned_publication() {
 
 /// `starttime` from `/proc/pid/stat` (field 22). `None` if that pid is gone.
 fn process_start_ticks(pid: i32) -> Option<u64> {
+    Some(proc_stat(pid)?.start_ticks)
+}
+
+struct ProcStat {
+    state: u8,
+    start_ticks: u64,
+}
+
+fn proc_stat(pid: i32) -> Option<ProcStat> {
     if pid <= 0 {
         return None;
     }
     let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let rest = text.rsplit_once(')')?.1;
     // Tokens after `comm` begin at field 3 (state). Field 22 is starttime.
-    rest.split_whitespace().nth(19)?.parse().ok()
+    let mut fields = rest.split_whitespace();
+    let state = *fields.next()?.as_bytes().first()?;
+    let start_ticks = fields.nth(18)?.parse().ok()?;
+    Some(ProcStat { state, start_ticks })
+}
+
+/// Same start time, and not a zombie. A zombie keeps its pid and start time
+/// until `wait`, so start time alone would escalate SIGKILL after a clean exit.
+fn owned_still_running(pid: i32, started: u64) -> bool {
+    matches!(
+        proc_stat(pid),
+        Some(stat) if stat.start_ticks == started && stat.state != b'Z' && stat.state != b'X'
+    )
 }
 
 extern "C" fn stop_owned_on_process_exit() {
@@ -484,27 +546,113 @@ extern "C" fn stop_owned_on_process_exit() {
     unsafe {
         libc::write(2, msg.as_ptr() as *const libc::c_void, msg.len());
     }
-    signal_if_same_process(pid, started);
+    signal_owned_group(pid, started, STOP_GRACE);
 }
 
-/// SIGTERM, then SIGKILL, only if `pid` is still the process that started at `started`.
-fn signal_if_same_process(pid: i32, started: u64) {
-    if process_start_ticks(pid) != Some(started) {
-        return;
+/// SIGTERM, then SIGKILL only if that same process is still alive after `grace`.
+///
+/// `started` is `/proc/<pid>/stat` starttime. A mismatch means the pid was
+/// reused or the child already exited, and nothing is signaled. `grace` is
+/// `STOP_GRACE` on the process-exit path (10s), not a fixed 200 ms.
+/// A failed signal does not select a different pid.
+fn signal_owned_group(pid: i32, started: u64, grace: Duration) -> OwnedSignal {
+    if pid <= 0 {
+        return OwnedSignal::Refused;
     }
-    unsafe {
-        libc::kill(-pid, libc::SIGTERM);
-        let wait = libc::timespec {
-            tv_sec: 0,
-            tv_nsec: 200_000_000,
+    if !owned_still_running(pid, started) {
+        return if process_start_ticks(pid) == Some(started) {
+            OwnedSignal::Exited
+        } else {
+            OwnedSignal::NotOwned
         };
-        libc::nanosleep(&wait, std::ptr::null_mut());
     }
-    if process_start_ticks(pid) == Some(started) {
+    match send_group_signal(pid, libc::SIGTERM) {
+        GroupSignal::Gone => {
+            if !owned_still_running(pid, started) {
+                return if process_start_ticks(pid) == Some(started) {
+                    OwnedSignal::Exited
+                } else {
+                    OwnedSignal::NotOwned
+                };
+            }
+            // `kill` reported ESRCH but this start time is still running.
+            // Do not switch pids. Wait the grace, then escalate only if it matches.
+        }
+        GroupSignal::Sent | GroupSignal::Failed => {}
+    }
+    let deadline = Instant::now() + grace;
+    loop {
+        if !owned_still_running(pid, started) {
+            return OwnedSignal::Exited;
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        let slice = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 30_000_000,
+        };
         unsafe {
-            libc::kill(-pid, libc::SIGKILL);
+            libc::nanosleep(&slice, std::ptr::null_mut());
         }
     }
+    if !owned_still_running(pid, started) {
+        return OwnedSignal::Exited;
+    }
+    match send_group_signal(pid, libc::SIGKILL) {
+        GroupSignal::Sent => OwnedSignal::Killed,
+        GroupSignal::Gone => {
+            if owned_still_running(pid, started) {
+                OwnedSignal::KillFailed
+            } else {
+                OwnedSignal::Exited
+            }
+        }
+        GroupSignal::Failed => OwnedSignal::KillFailed,
+    }
+}
+
+/// Result of signaling one process group. `Failed` is not "this pid is gone":
+/// errno is read only after `kill` itself runs, so a test injection or a
+/// stale errno cannot be mistaken for ESRCH.
+enum GroupSignal {
+    Sent,
+    Gone,
+    Failed,
+}
+
+fn send_group_signal(pid: i32, signal: i32) -> GroupSignal {
+    if pid <= 0 {
+        return GroupSignal::Failed;
+    }
+    #[cfg(test)]
+    if EXIT_SIGNAL_FAILS.load(Ordering::SeqCst) {
+        return GroupSignal::Failed;
+    }
+    let rc = unsafe { libc::kill(-pid, signal) };
+    if rc == 0 {
+        return GroupSignal::Sent;
+    }
+    let err = std::io::Error::last_os_error();
+    if err.raw_os_error() == Some(libc::ESRCH) {
+        GroupSignal::Gone
+    } else {
+        GroupSignal::Failed
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OwnedSignal {
+    /// Pid was 0 or negative. Nothing was signaled.
+    Refused,
+    /// Start time did not match, or the pid was already gone.
+    NotOwned,
+    /// The process left before SIGKILL. It was not force-killed.
+    Exited,
+    /// SIGKILL was sent to the same process group after the grace period.
+    Killed,
+    /// SIGKILL failed. The pid was not replaced with another one.
+    KillFailed,
 }
 
 #[cfg(test)]
@@ -514,6 +662,22 @@ fn ignores_sigterm(pid: i32) -> bool {
     };
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("SigIgn:") {
+            let Ok(mask) = u64::from_str_radix(rest.trim(), 16) else {
+                return false;
+            };
+            return mask & (1u64 << (libc::SIGTERM - 1)) != 0;
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+fn catches_sigterm(pid: i32) -> bool {
+    let Ok(text) = std::fs::read_to_string(format!("/proc/{pid}/status")) else {
+        return false;
+    };
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("SigCgt:") {
             let Ok(mask) = u64::from_str_radix(rest.trim(), 16) else {
                 return false;
             };
@@ -571,6 +735,51 @@ mod tests {
                 libc::kill(self.0 as i32, libc::SIGKILL);
             }
         }
+    }
+
+    fn spawn_session(binary: &Path) -> Child {
+        let mut command = Command::new(binary);
+        unsafe {
+            use std::os::unix::process::CommandExt;
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        command.spawn().unwrap()
+    }
+
+    #[test]
+    fn x_errors_are_ignored_only_for_teardown_drawable_codes() {
+        assert!(!window_teardown_started());
+        for code in [0u8, 1, 2, 3, 8, 9, 10, 11, 255] {
+            assert!(
+                !ignore_x_error_during_teardown(code, false),
+                "code {code} was ignored before teardown"
+            );
+        }
+        assert!(ignore_x_error_during_teardown(X_BAD_WINDOW, true));
+        assert!(ignore_x_error_during_teardown(X_BAD_DRAWABLE, true));
+        for code in [0u8, 1, 2, 8, 10, 11, 255] {
+            assert!(
+                !ignore_x_error_during_teardown(code, true),
+                "code {code} was ignored during teardown"
+            );
+        }
+        assert!(gdk_event_starts_teardown(0, 0));
+        assert!(gdk_event_starts_teardown(1, 0));
+        assert!(gdk_event_starts_teardown(32, 1));
+        assert!(gdk_event_starts_teardown(32, 2));
+        assert!(gdk_event_starts_teardown(32, (1 << 7) | 2));
+        assert!(
+            !gdk_event_starts_teardown(32, 1 << 7),
+            "focus must not arm teardown"
+        );
+        assert!(!gdk_event_starts_teardown(32, 0));
+        assert!(!gdk_event_starts_teardown(2, 1));
+        assert!(!gdk_event_starts_teardown(12, 1));
     }
 
     #[test]
@@ -830,11 +1039,19 @@ mod tests {
     }
 
     #[test]
-    fn exit_hook_signals_only_the_matching_process_group() {
+    fn exit_hook_waits_out_grace_checks_ownership_and_reports_signal_failure() {
+        assert_eq!(STOP_GRACE, Duration::from_secs(10));
+        assert!(STOP_GRACE > Duration::from_millis(200));
+
         let tmp = tempfile::tempdir().unwrap();
-        let hold = script(
+        let slow = script(
             tmp.path(),
-            "hold.py",
+            "slow.py",
+            "#!/usr/bin/env python3\nimport signal, sys, time\ndef on_term(_s, _f):\n    time.sleep(0.45)\n    sys.exit(0)\nsignal.signal(signal.SIGTERM, on_term)\nwhile True:\n    time.sleep(0.05)\n",
+        );
+        let stubborn = script(
+            tmp.path(),
+            "stubborn.py",
             "#!/usr/bin/env python3\nimport signal, time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\nwhile True:\n    time.sleep(0.05)\n",
         );
         let other = script(
@@ -842,51 +1059,111 @@ mod tests {
             "bystander.sh",
             "#!/bin/sh\nwhile true; do sleep 0.05; done\n",
         );
-        let mut owned = {
-            let mut command = Command::new(&hold);
-            unsafe {
-                use std::os::unix::process::CommandExt;
-                command.pre_exec(|| {
-                    if libc::setsid() == -1 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    Ok(())
-                });
-            }
-            command.spawn().unwrap()
-        };
-        let owned_pid = owned.id() as i32;
-        let _owned_guard = KillPid(owned.id());
         let mut bystander = Command::new(&other).spawn().unwrap();
         let bystander_pid = bystander.id();
         let _bystander_guard = KillPid(bystander_pid);
+
+        assert_eq!(
+            signal_owned_group(0, 1, Duration::from_millis(50)),
+            OwnedSignal::Refused
+        );
+        assert_eq!(
+            signal_owned_group(bystander_pid as i32, 1, Duration::from_millis(50)),
+            OwnedSignal::NotOwned
+        );
+        assert!(process_alive(bystander_pid));
+
+        let mut slow_child = spawn_session(&slow);
+        let slow_pid = slow_child.id();
+        let _slow_guard = KillPid(slow_pid);
+        let ready = Instant::now() + Duration::from_secs(2);
+        loop {
+            if catches_sigterm(slow_pid as i32) {
+                break;
+            }
+            assert!(
+                Instant::now() < ready,
+                "slow child never installed a SIGTERM handler"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        let slow_started = process_start_ticks(slow_pid as i32).expect("slow start");
+        let began = Instant::now();
+        let outcome =
+            signal_owned_group(slow_pid as i32, slow_started, Duration::from_millis(1200));
+        let elapsed = began.elapsed();
+        assert_eq!(outcome, OwnedSignal::Exited, "slow child was force-killed");
+        assert!(
+            elapsed > Duration::from_millis(200),
+            "exit hook did not wait past 200 ms: {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(1200),
+            "exit hook waited for SIGKILL after the child had exited: {elapsed:?}"
+        );
+        let status = slow_child.wait().expect("reap slow child");
+        assert_eq!(
+            std::os::unix::process::ExitStatusExt::signal(&status),
+            None,
+            "child that exits after SIGTERM was SIGKILLed"
+        );
+        assert!(process_alive(bystander_pid));
+
+        let mut stubborn_child = spawn_session(&stubborn);
+        let stubborn_pid = stubborn_child.id() as i32;
+        let _stubborn_guard = KillPid(stubborn_child.id());
         let ready = Instant::now() + Duration::from_secs(1);
         loop {
-            if ignores_sigterm(owned_pid) {
+            if ignores_sigterm(stubborn_pid) {
                 break;
             }
             assert!(Instant::now() < ready, "child never ignored SIGTERM");
             thread::sleep(Duration::from_millis(20));
         }
-        let started = process_start_ticks(owned_pid).expect("start time");
-        signal_if_same_process(owned_pid, started.wrapping_add(1));
-        assert!(
-            process_alive(owned.id()),
-            "mismatched start time was signaled"
-        );
-        assert!(process_alive(bystander_pid));
+        let stubborn_started = process_start_ticks(stubborn_pid).expect("stubborn start");
+        let grace = Duration::from_millis(400);
         let began = Instant::now();
-        signal_if_same_process(owned_pid, started);
+        let outcome = signal_owned_group(stubborn_pid, stubborn_started, grace);
+        let elapsed = began.elapsed();
+        assert_eq!(outcome, OwnedSignal::Killed);
         assert!(
-            began.elapsed() < Duration::from_secs(2),
-            "exit hook was not bounded"
+            elapsed >= grace,
+            "SIGKILL ran before the grace period: {elapsed:?}"
         );
-        let status = owned.wait().expect("reap owned child");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "escalation was not bounded"
+        );
+        let status = stubborn_child.wait().expect("reap stubborn child");
         assert_eq!(
             std::os::unix::process::ExitStatusExt::signal(&status),
             Some(libc::SIGKILL)
         );
-        assert!(process_alive(bystander_pid), "exit hook killed a bystander");
+        assert!(
+            process_alive(bystander_pid),
+            "escalation killed a bystander"
+        );
+
+        let held = spawn_session(&stubborn);
+        let held_pid = held.id() as i32;
+        let _held_guard = KillPid(held.id());
+        let held_started = process_start_ticks(held_pid).expect("held start");
+        EXIT_SIGNAL_FAILS.store(true, Ordering::SeqCst);
+        let began = Instant::now();
+        let outcome = signal_owned_group(held_pid, held_started, Duration::from_millis(300));
+        let elapsed = began.elapsed();
+        EXIT_SIGNAL_FAILS.store(false, Ordering::SeqCst);
+        assert_eq!(outcome, OwnedSignal::KillFailed);
+        assert!(elapsed >= Duration::from_millis(300));
+        assert!(elapsed < Duration::from_secs(2));
+        assert!(
+            process_alive(held.id()),
+            "a failed signal dropped the child"
+        );
+        assert!(
+            process_alive(bystander_pid),
+            "a failed signal hit a bystander"
+        );
         let _ = bystander.kill();
         let _ = bystander.wait();
     }
