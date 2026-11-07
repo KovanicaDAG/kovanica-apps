@@ -114,7 +114,7 @@ The default Cargo feature is `gui`, which links Tauri and therefore GTK/WebKit. 
 cargo build --manifest-path src-tauri/Cargo.toml --features gui
 ```
 
-That needs `pkg-config` and the GTK/WebKit development packages (`libgtk-3-dev`, `libwebkit2gtk-4.1-dev`, and their dependencies). On this Debian 12 check those were GTK 3.24.38, glib 2.74.6, and WebKitGTK 4.1 2.50.6. `cargo build --manifest-path src-tauri/Cargo.toml --locked --features gui --bins` produced the debug binary. A `.deb` package was not built. The window was exercised on Xvfb `:99`, not on a physical display.
+That needs `pkg-config` and the GTK/WebKit development packages (`libgtk-3-dev`, `libwebkit2gtk-4.1-dev`, and their dependencies). On this Debian 12 check those were GTK 3.24.38, glib 2.74.6, and WebKitGTK 4.1 2.50.6. `cargo build --manifest-path src-tauri/Cargo.toml --locked --features gui --bins` produced the debug binary. A `.deb` package was not built. The window was exercised on Xvfb `:99`, not on a physical display. The first installable package is not built yet; the plan is [docs/linux-node-package.md](../docs/linux-node-package.md).
 
 `console-desktop` still path-depends on `../../../crates` and is not fixed here.
 

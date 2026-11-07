@@ -31,7 +31,7 @@ Migrated from `apps/*` at tip `e98b5e008331056d6bea55014982d4077e745b77` (flatte
 | `console-desktop` | Console desktop (Tauri) |
 | `node-desktop` | Linux Kovanica Node supervisor (Tauri). External `kovanica-node` binary; no bundled node. |
 
-Build the native FFI from L1 (`kovanica-light-ffi`) and point `node-desktop` at a `kovanica-node` executable you built yourself. See [node-desktop/README.md](node-desktop/README.md).
+Build the native FFI from L1 (`kovanica-light-ffi`) and point `node-desktop` at a `kovanica-node` executable you built yourself. See [node-desktop/README.md](node-desktop/README.md). The first Linux package is not built yet. The plan is [docs/linux-node-package.md](docs/linux-node-package.md).
 
 `console-desktop` still depends on `../../../crates/...` from the old monorepo layout. That path is outside this repository and was not repaired in the Linux node milestone.
 
