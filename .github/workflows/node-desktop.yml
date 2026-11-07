@@ -75,6 +75,10 @@ jobs:
     name: Debian 12 deb
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    # The bookworm image's /bin/sh is dash, which rejects `set -o pipefail`.
+    defaults:
+      run:
+        shell: bash
     container:
       # debian:bookworm linux/amd64 image manifest, not the multi-arch index.
       # Resolved 2026-11-07 from registry-1.docker.io library/debian tag bookworm.
