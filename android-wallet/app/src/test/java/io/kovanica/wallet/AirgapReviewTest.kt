@@ -1,0 +1,59 @@
+package io.kovanica.wallet
+
+import org.json.JSONObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class AirgapReviewTest {
+    @Test
+    fun refuses_a_payload_for_a_different_chain() {
+        assertFalse(AirgapReview.matches(5, 4))
+        assertEquals(
+            "This transaction is for chain 5. This phone is set to chain 4. Signing is refused.",
+            AirgapReview.refusal(5, 4),
+        )
+        assertTrue(AirgapReview.matches(5, 5))
+    }
+
+    @Test
+    fun transfer_and_call_rows_name_the_fields_a_person_must_read() {
+        val transfer = JSONObject()
+            .put("kind", "transfer")
+            .put("from", "kvncsender")
+            .put("to", "kvncrecipient")
+            .put("amount", "1000000000")
+            .put("fee", "1000")
+            .put("nonce", "7")
+            .put("chainId", 5)
+        val rows = AirgapReview.lines(transfer)
+        assertTrue(rows.any { it == "Amount: 1 KVNC (1000000000 atoms)" })
+        assertTrue(rows.any { it == "Fee: 1000 atoms" })
+        assertTrue(rows.any { it.startsWith("Recipient:") })
+
+        val call = JSONObject()
+            .put("kind", "call")
+            .put("from", "kvncsender")
+            .put("to", "kvnccontract")
+            .put("method", "withdraw")
+            .put("args", "aa")
+            .put("gas", "100000")
+            .put("fee", "10")
+            .put("nonce", "1")
+            .put("chainId", 5)
+        val callRows = AirgapReview.lines(call)
+        assertTrue(callRows.any { it == "Method: withdraw" })
+        assertTrue(callRows.any { it == "Arguments: aa" })
+        assertTrue(callRows.any { it == "Gas limit: 100000" })
+    }
+
+    @Test
+    fun pruning_window_keeps_fourteen_thousand_four_hundred_rounds() {
+        val tip = 20_000L
+        val kept = AirgapReview.retain(setOf(tip - 14_400L, tip - 14_399L, tip), tip)
+        assertFalse(kept.contains(tip - 14_400L))
+        assertTrue(kept.contains(tip - 14_399L))
+        assertEquals(2, kept.size)
+    }
+}

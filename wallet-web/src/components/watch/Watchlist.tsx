@@ -108,7 +108,7 @@ export function Watchlist({ onSend, onContract }: { onSend: (address: string) =>
       <section className="rounded-card border border-line bg-ink p-4">
         <h3 className="text-lg text-paper">Miner / node</h3>
         {hybrid ? <p className="mt-3 inline-flex min-h-8 items-center rounded-full border border-copper px-3 text-xs text-copper">Hybrid PoW + GHOSTDAG (K=5, 4s)</p> : null}
-        <p className="mt-2 text-sm text-muted">Chain 5 is Hybrid PoW + GHOSTDAG. K is 5 and the target block time is 4 seconds. target_bits and work are shown only when the node includes them. This screen does not recompute KovanicaHash. The phone and the desktop console do.</p>
+        <p className="mt-2 text-sm text-muted">Chain 5 is Hybrid PoW + GHOSTDAG. K is 5 and the target block time is 4 seconds. target_bits and work are shown only when the node includes them. This screen does not recompute KovanicaHash. The phone and the desktop console do. A signed air-gap QR is scanned from Confirm, checked against this chain, and broadcast with kovanica_sendRawTransaction.</p>
         <label className="mt-3 grid gap-1 text-sm text-muted">
           Watched miner
           <input className="min-h-11 rounded-2xl border border-line bg-surface px-4 font-mono text-sm text-paper" value={miner} onChange={(e) => setMiner(e.target.value)} spellCheck={false} autoCapitalize="none" />

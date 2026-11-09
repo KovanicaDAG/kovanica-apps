@@ -1,16 +1,24 @@
 package io.kovanica.wallet
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.graphics.Bitmap
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
+import android.hardware.biometrics.BiometricManager
+import android.hardware.biometrics.BiometricPrompt
+import android.os.Build
 import android.os.Bundle
+import android.os.CancellationSignal
 import android.text.InputType
+import android.view.View
+import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
@@ -33,6 +41,8 @@ class AirgapSignActivity : Activity() {
     private lateinit var passField: EditText
     private lateinit var bip39Field: EditText
     private lateinit var accountField: EditText
+    private lateinit var clearButton: Button
+    private val hideSigned = Runnable { clearSigned("Signed QR hidden. Nothing was broadcast.") }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -58,6 +68,8 @@ class AirgapSignActivity : Activity() {
             setText(hdAccountIndex().toString())
             inputType = InputType.TYPE_CLASS_NUMBER
         }
+        clearButton = WalletUi.button(this, "Clear signed QR", filled = false) { clearSigned("Signed QR cleared. Nothing was broadcast.") }
+        clearButton.visibility = View.GONE
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -66,18 +78,87 @@ class AirgapSignActivity : Activity() {
         }
         root.addView(title())
         root.addView(status, gap())
-        if (doc == null || doc.optInt("v") != 1 || doc.optString("role") != "unsigned") {
-            status.text = "That code is not an unsigned Kovanica transaction."
-        } else {
-            status.text = summary(doc)
-            root.addView(passField, gap())
-            root.addView(bip39Field, gap())
-            root.addView(accountField, gap())
-            root.addView(WalletUi.button(this, "Sign offline") { sign(doc) }, gap())
+        when {
+            doc == null || doc.optInt("v") != 1 || doc.optString("role") != "unsigned" || !doc.has("chainId") -> {
+                status.text = "That code is not an unsigned Kovanica transaction."
+            }
+            !AirgapReview.matches(doc.getLong("chainId"), NetworkPrefs.chainId(this)) -> {
+                val message = AirgapReview.refusal(doc.getLong("chainId"), NetworkPrefs.chainId(this))
+                status.text = message
+                Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+            }
+            else -> {
+                status.text = AirgapReview.lines(doc).joinToString("\n")
+                root.addView(passField, gap())
+                root.addView(bip39Field, gap())
+                root.addView(accountField, gap())
+                root.addView(WalletUi.button(this, "Review & sign") { review(doc) }, gap())
+            }
         }
         root.addView(qr, gap())
         root.addView(signedText, gap())
+        root.addView(clearButton, gap())
         setContentView(ScrollView(this).apply { addView(root) })
+    }
+
+    override fun onDestroy() {
+        qr.removeCallbacks(hideSigned)
+        io.shutdown()
+        super.onDestroy()
+    }
+
+    private fun review(doc: JSONObject) {
+        if (passField.text.toString().isEmpty()) {
+            status.text = "Enter the wallet password. The phrase stays on this phone."
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle(if (doc.optString("kind") == "call") "Confirm contract call" else "Confirm transfer")
+            .setMessage(AirgapReview.lines(doc).joinToString("\n"))
+            .setNegativeButton("Back", null)
+            .setPositiveButton("Confirm & sign") { _, _ -> gateBiometric { sign(doc) } }
+            .show()
+    }
+
+    private fun gateBiometric(onConfirmed: () -> Unit) {
+        if (Build.VERSION.SDK_INT < 29) {
+            onConfirmed()
+            return
+        }
+        val manager = getSystemService(BiometricManager::class.java)
+        @Suppress("DEPRECATION")
+        val available = manager?.canAuthenticate() == BiometricManager.BIOMETRIC_SUCCESS
+        if (!available) {
+            onConfirmed()
+            return
+        }
+        val prompt = BiometricPrompt.Builder(this)
+            .setTitle("Confirm this signature")
+            .setSubtitle("The password you typed still decrypts the key.")
+            .setNegativeButton("Cancel", mainExecutor) { _, _ ->
+                status.text = "Signing cancelled."
+            }
+            .build()
+        prompt.authenticate(
+            CancellationSignal(),
+            mainExecutor,
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    onConfirmed()
+                }
+
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    if (errorCode == BiometricPrompt.BIOMETRIC_ERROR_NO_BIOMETRICS ||
+                        errorCode == BiometricPrompt.BIOMETRIC_ERROR_HW_NOT_PRESENT ||
+                        errorCode == BiometricPrompt.BIOMETRIC_ERROR_HW_UNAVAILABLE
+                    ) {
+                        onConfirmed()
+                    } else {
+                        status.text = errString.toString()
+                    }
+                }
+            },
+        )
     }
 
     private fun sign(doc: JSONObject) {
@@ -131,20 +212,28 @@ class AirgapSignActivity : Activity() {
                 doc.put("role", "signed")
                 doc.put("raw", raw.removePrefix("0x"))
                 val signed = doc.toString()
-                runOnUiThread {
-                    status.text = "Signed. Scan this code back on the computer. Nothing was broadcast."
-                    signedText.text = signed
-                    qr.setImageBitmap(runCatching { qrBitmap(signed, dp(280)) }.getOrNull())
-                }
+                runOnUiThread { showSigned(signed) }
             } catch (error: Exception) {
                 runOnUiThread { status.text = error.message ?: "The phone could not sign that payload." }
             }
         }
     }
 
-    private fun summary(doc: JSONObject): String {
-        val kind = if (doc.optString("kind") == "call") "Contract call, wire 6" else "Transfer, wire 0"
-        return "$kind\nFrom: ${doc.optString("from")}\nTo: ${doc.optString("to")}\nAmount: ${doc.optString("amount")} atoms\nFee: ${doc.optString("fee")} atoms\nChain ${doc.optLong("chainId")}"
+    private fun showSigned(signed: String) {
+        status.text = "Signed. Scan this code back on the computer. Nothing was broadcast. It hides in 60 seconds."
+        signedText.text = signed
+        qr.setImageBitmap(runCatching { qrBitmap(signed, dp(280)) }.getOrNull())
+        clearButton.visibility = View.VISIBLE
+        qr.removeCallbacks(hideSigned)
+        qr.postDelayed(hideSigned, 60_000)
+    }
+
+    private fun clearSigned(message: String) {
+        qr.removeCallbacks(hideSigned)
+        qr.setImageDrawable(null)
+        signedText.text = ""
+        clearButton.visibility = View.GONE
+        status.text = message
     }
 
     private fun isHd(): Boolean = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean("is_hd", false)

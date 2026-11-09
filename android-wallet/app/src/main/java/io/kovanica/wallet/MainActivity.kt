@@ -1866,7 +1866,15 @@ class MainActivity : Activity() {
             "GHOSTDAG K=${snapshot.ghostdagK}  ·  target ${snapshot.targetMs} ms\n" +
             "pruning ${snapshot.pruningRounds} rounds  ·  cache ${snapshot.cacheMb} MiB\n" +
             "local RPC ${snapshot.bind}\n" +
+            "${snapshot.pruningBadge}\n" +
+            "Verified headers in window: ${snapshot.headerCount}\n" +
+            "Local DB: ${dbLabel(snapshot.storeBytes)}\n" +
             snapshot.note
+    }
+
+    private fun dbLabel(bytes: String): String {
+        if (bytes == "0") return "0 B — no redb or sqlite file. Older block bodies are not kept, so this stays under 250 MB."
+        return "$bytes B"
     }
 
     private fun chainPreview(): String =

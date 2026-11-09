@@ -115,6 +115,9 @@ class KovanicaNodeService : Service() {
             bind = profile.localRpcBind,
             ghostdagK = profile.ghostdagK.toString(),
             targetMs = profile.targetBlockMs.toString(),
+            headerCount = NodeStore.count(this).toString(),
+            storeBytes = NodeStore.databaseBytes(this).toString(),
+            pruningBadge = NodeStore.BADGE,
         )
         if (!allowsSync(NodePrefs.wifiAndChargingOnly(this))) {
             NodeRuntime.publish(this, base.copy(phase = PHASE_PAUSED, note = "Paused until the phone is on unmetered Wi-Fi and charging."))
@@ -154,6 +157,7 @@ class KovanicaNodeService : Service() {
                     verifyPowHeaderChainJson(HYBRID_CHAIN, "[$parent,${header}]", now)
                 }.getOrDefault(verified.work)
             }
+            val remembered = NodeStore.note(this, verified.round.toLong())
             NodeRuntime.publish(
                 this,
                 base.copy(
@@ -163,6 +167,8 @@ class KovanicaNodeService : Service() {
                     cumulative = cumulative,
                     targetBits = header.opt("target_bits")?.toString() ?: header.opt("targetBits")?.toString() ?: "—",
                     note = "Verified on this phone.",
+                    headerCount = remembered.toString(),
+                    storeBytes = NodeStore.databaseBytes(this).toString(),
                 ),
             )
         } catch (error: Exception) {
@@ -216,6 +222,9 @@ object NodeRuntime {
         val bind: String = "127.0.0.1:8545",
         val ghostdagK: String = "5",
         val targetMs: String = "4000",
+        val headerCount: String = "0",
+        val storeBytes: String = "0",
+        val pruningBadge: String = "Pruning window: 14,400 rounds (~16h)",
     )
 
     @Volatile
@@ -249,5 +258,48 @@ object NodePrefs {
             .edit()
             .putBoolean(KEY, enabled)
             .apply()
+    }
+}
+
+/** Counts verified tips inside the 14,400-round window and measures any local db files. */
+object NodeStore {
+    const val BADGE = "Pruning window: 14,400 rounds (~16h)"
+    private const val KEY = "verified_header_rounds"
+
+    fun count(context: Context): Int = read(context).size
+
+    fun note(context: Context, round: Long): Int {
+        val kept = AirgapReview.retain(read(context), round)
+        context.getSharedPreferences(NetworkPrefs.PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY, kept.sorted().joinToString(","))
+            .apply()
+        return kept.size
+    }
+
+    fun databaseBytes(context: Context): Long {
+        val dirs = listOfNotNull(
+            context.filesDir,
+            context.noBackupFilesDir,
+            context.getExternalFilesDir(null),
+            context.getDatabasePath("kovanica").parentFile,
+        )
+        var total = 0L
+        val seen = HashSet<String>()
+        for (dir in dirs) {
+            if (!seen.add(dir.absolutePath) || !dir.isDirectory) continue
+            dir.listFiles()?.forEach { file ->
+                val name = file.name.lowercase()
+                if (file.isFile && (name.endsWith(".db") || name.endsWith(".sqlite") || name.endsWith(".sqlite3") || name.endsWith(".redb"))) {
+                    total += file.length()
+                }
+            }
+        }
+        return total
+    }
+
+    private fun read(context: Context): Set<Long> {
+        val raw = context.getSharedPreferences(NetworkPrefs.PREFS, Context.MODE_PRIVATE).getString(KEY, "").orEmpty()
+        return raw.split(',').mapNotNull { it.toLongOrNull() }.toSet()
     }
 }
