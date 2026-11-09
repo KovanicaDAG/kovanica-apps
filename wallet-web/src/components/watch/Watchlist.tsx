@@ -28,6 +28,9 @@ export function Watchlist({ onSend, onContract }: { onSend: (address: string) =>
   const [miner, setMiner] = useState(account?.address ?? "");
   const [nodeRead, setNodeRead] = useState<{ dag: string; template: string; header: string } | null>(null);
   const [nodeBusy, setNodeBusy] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+  const reportedChain = nodeRead ? fieldIn(nodeRead, ["chainId", "chain_id"]) : null;
+  const hybrid = chainId === 5 || reportedChain === "5";
 
   async function refresh(item: WatchItem) {
     if (!net.online) return setError("The node is not responding, so this contract cannot be read.");
@@ -104,6 +107,7 @@ export function Watchlist({ onSend, onContract }: { onSend: (address: string) =>
       ))}
       <section className="rounded-card border border-line bg-ink p-4">
         <h3 className="text-lg text-paper">Miner / node</h3>
+        {hybrid ? <p className="mt-3 inline-flex min-h-8 items-center rounded-full border border-copper px-3 text-xs text-copper">Hybrid PoW + GHOSTDAG (K=5, 4s)</p> : null}
         <p className="mt-2 text-sm text-muted">Chain 5 is Hybrid PoW + GHOSTDAG. K is 5 and the target block time is 4 seconds. target_bits and work are shown only when the node includes them. This screen does not recompute KovanicaHash. The phone and the desktop console do.</p>
         <label className="mt-3 grid gap-1 text-sm text-muted">
           Watched miner
@@ -130,6 +134,8 @@ export function Watchlist({ onSend, onContract }: { onSend: (address: string) =>
             <p className="text-paper">GHOSTDAG K=5 · target 4 s · pruning 14,400 rounds · cache 64 MiB</p>
             <p className="text-paper">target_bits {fieldIn(nodeRead, ["target_bits", "targetBits"]) ?? "not in this response"}</p>
             <p className="text-paper">work {fieldIn(nodeRead, ["work", "blue_work", "blueWork"]) ?? "not in this response"}</p>
+            <CopyRow label="powHash" value={fieldIn(nodeRead, ["powHash", "pow_hash"])} copied={copied} onCopy={(value) => void copyText("powHash", value, setCopied, setError)} />
+            <CopyRow label="tip round" value={fieldIn(nodeRead, ["round", "tipRound", "tip_round"])} copied={copied} onCopy={(value) => void copyText("tip round", value, setCopied, setError)} />
             <p className="text-muted">{miner && (nodeRead.dag.includes(miner) || nodeRead.template.includes(miner) || nodeRead.header.includes(miner)) ? "The watched miner appears in this response." : "The watched miner does not appear in this response."}</p>
             <div>
               <p className="text-muted">DAG info</p>
@@ -144,6 +150,27 @@ export function Watchlist({ onSend, onContract }: { onSend: (address: string) =>
       </section>
     </div>
   );
+}
+
+function CopyRow({ label, value, copied, onCopy }: { label: string; value: string | null; copied: string | null; onCopy: (value: string) => void }) {
+  if (!value) return <p className="text-paper">{label} not in this response</p>;
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <p className="mono text-paper break-all">{label} {value}</p>
+      <button type="button" className="min-h-11 rounded-full border border-line px-4 text-sm text-paper" onClick={() => onCopy(value)}>
+        {copied === label ? "Copied" : "Copy"}
+      </button>
+    </div>
+  );
+}
+
+async function copyText(label: string, value: string, setCopied: (label: string) => void, setError: (message: string) => void) {
+  try {
+    await navigator.clipboard.writeText(value);
+    setCopied(label);
+  } catch {
+    setError("Could not copy that value.");
+  }
 }
 
 function fieldIn(read: { dag: string; template: string; header: string }, keys: string[]): string | null {

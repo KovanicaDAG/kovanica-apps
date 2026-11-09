@@ -38,11 +38,16 @@ class KovanicaNodeService : Service() {
             stopPolling()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
-            NodeRuntime.publish(NodeRuntime.snapshot.copy(phase = PHASE_STOPPED, note = "Stopped."))
+            NodeRuntime.publish(this, NodeRuntime.snapshot.copy(phase = PHASE_STOPPED, note = "Stopped."))
             return START_NOT_STICKY
         }
-        chainId = intent?.getLongExtra(EXTRA_CHAIN_ID, HYBRID_CHAIN.toLong())?.toULong() ?: HYBRID_CHAIN
+        chainId = intent?.getLongExtra(EXTRA_CHAIN_ID, chainId.toLong())?.toULong() ?: chainId
         startInForeground()
+        if (intent?.action == ACTION_VERIFY && thread != null) {
+            handler?.removeCallbacksAndMessages(null)
+            handler?.post { tick() }
+            return START_STICKY
+        }
         startPolling()
         return START_STICKY
     }
@@ -94,7 +99,7 @@ class KovanicaNodeService : Service() {
     private fun tick() {
         val profile = runCatching { defaultMobileNodeConfig(chainId) }.getOrNull()
         if (profile == null) {
-            NodeRuntime.publish(NodeRuntime.snapshot.copy(phase = PHASE_STOPPED, note = "The mobile node profile did not load."))
+            NodeRuntime.publish(this, NodeRuntime.snapshot.copy(phase = PHASE_STOPPED, note = "The mobile node profile did not load."))
             return
         }
         val base = NodeRuntime.Snapshot(
@@ -111,13 +116,13 @@ class KovanicaNodeService : Service() {
             ghostdagK = profile.ghostdagK.toString(),
             targetMs = profile.targetBlockMs.toString(),
         )
-        if (!allowsSync(profile.wifiAndChargingOnly)) {
-            NodeRuntime.publish(base.copy(phase = PHASE_PAUSED, note = "Paused until the phone is on unmetered Wi-Fi and charging."))
+        if (!allowsSync(NodePrefs.wifiAndChargingOnly(this))) {
+            NodeRuntime.publish(this, base.copy(phase = PHASE_PAUSED, note = "Paused until the phone is on unmetered Wi-Fi and charging."))
             schedule()
             return
         }
         if (chainId != HYBRID_CHAIN) {
-            NodeRuntime.publish(base.copy(note = "PoW header checks run on chain 5. This profile is chain $chainId."))
+            NodeRuntime.publish(this, base.copy(note = "PoW header checks run on chain 5. This profile is chain $chainId."))
             schedule()
             return
         }
@@ -135,7 +140,7 @@ class KovanicaNodeService : Service() {
                 header = NodePow.findHeader(client.call("kovanica_getLeaderHeader", JSONArray()))
             }
             if (header == null) {
-                NodeRuntime.publish(base.copy(note = "The node did not return a PoW header."))
+                NodeRuntime.publish(this, base.copy(note = "The node did not return a PoW header."))
                 schedule()
                 return
             }
@@ -150,6 +155,7 @@ class KovanicaNodeService : Service() {
                 }.getOrDefault(verified.work)
             }
             NodeRuntime.publish(
+                this,
                 base.copy(
                     round = verified.round.toString(),
                     powHash = verified.powHash,
@@ -160,7 +166,7 @@ class KovanicaNodeService : Service() {
                 ),
             )
         } catch (error: Exception) {
-            NodeRuntime.publish(base.copy(note = error.message ?: "The header check failed."))
+            NodeRuntime.publish(this, base.copy(note = error.message ?: "The header check failed."))
         }
         schedule()
     }
@@ -181,6 +187,7 @@ class KovanicaNodeService : Service() {
     companion object {
         const val ACTION_START = "io.kovanica.wallet.NODE_START"
         const val ACTION_STOP = "io.kovanica.wallet.NODE_STOP"
+        const val ACTION_VERIFY = "io.kovanica.wallet.NODE_VERIFY"
         const val EXTRA_CHAIN_ID = "chainId"
         private const val CHANNEL = "kovanica-node"
         private const val NOTIFICATION_ID = 7
@@ -193,6 +200,8 @@ object NodeRuntime {
     const val PHASE_RUNNING = "Running"
     const val PHASE_PAUSED = "Paused (Battery/Metered)"
     const val PHASE_STOPPED = "Stopped"
+
+    const val ACTION_UPDATED = "io.kovanica.wallet.NODE_UPDATED"
 
     data class Snapshot(
         val phase: String = PHASE_STOPPED,
@@ -215,14 +224,30 @@ object NodeRuntime {
 
     private val listeners = CopyOnWriteArrayList<(Snapshot) -> Unit>()
 
-    fun publish(next: Snapshot) {
+    fun publish(context: Context, next: Snapshot) {
         snapshot = next
         listeners.forEach { listener -> listener(next) }
+        context.sendBroadcast(Intent(ACTION_UPDATED).setPackage(context.packageName))
     }
 
     fun listen(listener: (Snapshot) -> Unit): () -> Unit {
         listeners.add(listener)
         listener(snapshot)
         return { listeners.remove(listener) }
+    }
+}
+
+/** User override for the profile's Wi-Fi and charging gate. Default is on. */
+object NodePrefs {
+    private const val KEY = "node_wifi_charging_only"
+
+    fun wifiAndChargingOnly(context: Context): Boolean =
+        context.getSharedPreferences(NetworkPrefs.PREFS, Context.MODE_PRIVATE).getBoolean(KEY, true)
+
+    fun setWifiAndChargingOnly(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(NetworkPrefs.PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY, enabled)
+            .apply()
     }
 }

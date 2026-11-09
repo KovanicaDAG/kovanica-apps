@@ -4,8 +4,10 @@ import android.Manifest
 import android.app.Activity
 import android.app.ActivityManager
 import android.app.AlertDialog
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
@@ -73,7 +75,13 @@ class MainActivity : Activity() {
     private lateinit var chainMeta: TextView
     private lateinit var nodePhase: TextView
     private lateinit var nodeMeta: TextView
+    private lateinit var wifiToggle: Button
     private var stopNodeListen: () -> Unit = {}
+    private val nodeUpdates = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            renderNode(NodeRuntime.snapshot)
+        }
+    }
     private lateinit var rpcField: EditText
     private lateinit var chainField: EditText
     private lateinit var epochField: EditText
@@ -373,6 +381,18 @@ class MainActivity : Activity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        val filter = IntentFilter(NodeRuntime.ACTION_UPDATED)
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(nodeUpdates, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(nodeUpdates, filter)
+        }
+        renderNode(NodeRuntime.snapshot)
+    }
+
     override fun onDestroy() {
         stopNodeListen()
         io.shutdown()
@@ -380,6 +400,7 @@ class MainActivity : Activity() {
     }
 
     override fun onStop() {
+        runCatching { unregisterReceiver(nodeUpdates) }
         super.onStop()
         if (isChangingConfigurations) return
         // Opening History, Settings, or Receive also stops this screen.
@@ -1793,10 +1814,13 @@ class MainActivity : Activity() {
         nodeMeta = monoValue("").apply { setTextColor(MUTED) }
         addStack(nodeMeta, 8)
         addStack(button("Start node") { startNode() }, 14)
+        addStack(button("Verify now", filled = false) { verifyNow() }, 10)
         addStack(button("Stop node", filled = false) { stopNode() }, 10)
+        wifiToggle = button(wifiLabel(), filled = false) { toggleWifiOnly() }
+        addStack(wifiToggle, 10)
         addStack(
             caption(
-                "Chain 5 headers are checked on this phone. The service pauses on mobile data or while the battery is not charging.",
+                "Chain 5 headers are checked on this phone. Turn Wi-Fi and charging off only if you want those checks on cellular.",
             ),
             12,
         )
@@ -1811,6 +1835,21 @@ class MainActivity : Activity() {
             .setAction(KovanicaNodeService.ACTION_START)
             .putExtra(KovanicaNodeService.EXTRA_CHAIN_ID, chainIdField().toLong())
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
+    }
+
+    private fun verifyNow() {
+        val intent = Intent(this, KovanicaNodeService::class.java)
+            .setAction(KovanicaNodeService.ACTION_VERIFY)
+            .putExtra(KovanicaNodeService.EXTRA_CHAIN_ID, chainIdField().toLong())
+        if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
+    }
+
+    private fun wifiLabel(): String =
+        if (NodePrefs.wifiAndChargingOnly(this)) "Wi-Fi & charging only: On" else "Wi-Fi & charging only: Off"
+
+    private fun toggleWifiOnly() {
+        NodePrefs.setWifiAndChargingOnly(this, !NodePrefs.wifiAndChargingOnly(this))
+        if (::wifiToggle.isInitialized) wifiToggle.text = wifiLabel()
     }
 
     private fun stopNode() {
