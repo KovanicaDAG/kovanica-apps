@@ -33,6 +33,18 @@ class NativeLibrarySymbolsTest {
                 missing.joinToString("\n"),
             missing.isEmpty(),
         )
+        val hdSymbols = listOf(
+            "uniffi_kovanica_light_ffi_fn_func_create_hd_wallet",
+            "uniffi_kovanica_light_ffi_fn_func_import_hd_wallet",
+            "uniffi_kovanica_light_ffi_fn_func_derive_account",
+            "uniffi_kovanica_light_ffi_fn_func_sign_transfer_hd",
+            "uniffi_kovanica_light_ffi_fn_func_sign_call_hd",
+            "uniffi_kovanica_light_ffi_fn_func_lock",
+        )
+        for (sym in hdSymbols) {
+            assertTrue("missing HD UniFFI binding symbol $sym", needed.contains(sym))
+            assertTrue("missing HD UniFFI native symbol $sym", exported.contains(sym))
+        }
         assertTrue(
             "arm64 library is not 16 KB aligned (Android 15 refuses to load it)",
             ElfSymbols.minLoadAlign(so.readBytes()) >= 0x4000,

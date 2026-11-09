@@ -18,6 +18,8 @@ export function reviewRows(preview: TxPreview): ReviewRow[] {
   ];
   if (preview.kind === "call") {
     rows.splice(3, 0, { label: "Method", value: preview.method });
+    for (const detail of preview.details) rows.push(detail);
+    rows.push({ label: "Args hex", value: preview.argsHex || "none", mono: true });
     rows.push({ label: "Gas limit", value: preview.gasLimit });
   }
   return rows;

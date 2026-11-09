@@ -2,6 +2,7 @@ import { useState } from "react";
 import { checkAddress } from "@/core/address";
 import { formatAtoms, formatKvnc, parseAtoms, parseKvnc } from "@/core/format";
 import type { TxPreview } from "@/core/session";
+import { ContactSelect } from "@/components/contacts/ContactSelect";
 import { buildTransferPreview } from "@/services/wallet";
 import { signingLock, useNetwork } from "@/stores/network";
 import { presetById } from "@/lib/networks";
@@ -55,6 +56,7 @@ export function SendForm({ onReview }: { onReview: (preview: TxPreview) => void 
         Recipient
         <input className="min-h-11 rounded-2xl border border-line bg-ink px-4 font-mono text-sm text-paper" value={to} onChange={(e) => setTo(e.target.value)} autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="kvnc…dag" />
       </label>
+      <ContactSelect onPick={setTo} />
       {to.trim() ? <p className={address.ok ? "text-sm text-sage" : "text-sm text-clay"}>{address.message}</p> : null}
       <label className="grid gap-1 text-sm text-muted">
         Amount (KVNC)

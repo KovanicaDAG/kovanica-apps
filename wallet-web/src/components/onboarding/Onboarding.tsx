@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { generatePhrase, isValidMnemonic, mnemonicWordCount, normalizeMnemonic, suggestWords } from "@/core/hd";
-import { createHdWallet, importWallet, unlock } from "@/services/wallet";
+import { createDesktopWallet, createHdWallet, importWallet, isDesktopShell, unlock } from "@/services/wallet";
 import { useSession } from "@/stores/session";
 
 type Mode = "choose" | "create" | "import" | "unlock";
@@ -26,12 +26,27 @@ export function Onboarding({ mode }: { mode: Mode }) {
   const valid = isValidMnemonic(phrase);
   const count = mnemonicWordCount(phrase);
 
+  const desktop = isDesktopShell();
+
   async function sealCreate() {
     setError(null);
-    if (!valid) return setError("The phrase checksum does not match.");
-    if (list[quizIndex - 1] !== check.trim().toLowerCase()) return setError(`Word ${quizIndex} does not match.`);
     if (password.length < 8) return setError("Password must be at least 8 characters.");
     if (password !== again) return setError("Passwords do not match.");
+    if (desktop) {
+      setBusy(true);
+      try {
+        await createDesktopWallet(words, password);
+        setPassword("");
+        setAgain("");
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Could not create the wallet");
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+    if (!valid) return setError("The phrase checksum does not match.");
+    if (list[quizIndex - 1] !== check.trim().toLowerCase()) return setError(`Word ${quizIndex} does not match.`);
     setBusy(true);
     try {
       await createHdWallet(phrase, password);
@@ -91,7 +106,7 @@ export function Onboarding({ mode }: { mode: Mode }) {
 
       {screen === "choose" ? (
         <div className="mt-8 grid gap-3">
-          <button type="button" className="min-h-12 rounded-full bg-copper font-medium text-copper-ink" onClick={() => { setPhrase(generatePhrase(24)); setScreen("create"); }}>
+          <button type="button" className="min-h-12 rounded-full bg-copper font-medium text-copper-ink" onClick={() => { if (!desktop) setPhrase(generatePhrase(24)); setScreen("create"); }}>
             Create a new wallet
           </button>
           <button type="button" className="min-h-12 rounded-full border border-line text-paper" onClick={() => setScreen("import")}>
@@ -124,12 +139,12 @@ export function Onboarding({ mode }: { mode: Mode }) {
         <div className="mt-8 grid gap-4">
           <div className="flex gap-2">
             {([12, 24] as const).map((n) => (
-              <button key={n} type="button" className={`min-h-11 flex-1 rounded-full border ${words === n ? "border-copper text-copper" : "border-line text-muted"}`} onClick={() => { setWords(n); setPhrase(generatePhrase(n)); setCheck(""); }}>
+              <button key={n} type="button" className={`min-h-11 flex-1 rounded-full border ${words === n ? "border-copper text-copper" : "border-line text-muted"}`} onClick={() => { setWords(n); if (!desktop) { setPhrase(generatePhrase(n)); setCheck(""); } }}>
                 {n} words
               </button>
             ))}
           </div>
-          <ol className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          <ol className={`grid grid-cols-2 gap-2 sm:grid-cols-3 ${desktop ? "hidden" : ""}`}>
             {normalizeMnemonic(phrase).split(" ").filter(Boolean).map((word, i) => (
               <li key={`${word}-${i}`} className="rounded-xl border border-line bg-surface px-3 py-2 text-sm">
                 <span className="mr-2 text-muted">{i + 1}</span>
@@ -137,10 +152,13 @@ export function Onboarding({ mode }: { mode: Mode }) {
               </li>
             ))}
           </ol>
+          {desktop ? <p className="text-sm text-muted">The desktop signer creates the phrase. It is shown once, then cleared when the wallet locks.</p> : null}
+          {desktop ? null : (
           <label className="grid gap-1 text-sm text-muted">
             Confirm word {quizIndex}
             <input className="min-h-11 rounded-2xl border border-line bg-ink px-4 text-paper" value={check} onChange={(e) => setCheck(e.target.value)} autoComplete="off" />
           </label>
+          )}
           <label className="grid gap-1 text-sm text-muted">
             Password
             <input className="min-h-11 rounded-2xl border border-line bg-ink px-4 text-paper" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />

@@ -32,9 +32,14 @@ import io.kovanica.chain.ChainIds
 import org.json.JSONArray
 import org.json.JSONObject
 import uniffi.kovanica_light.confirmAccount
+import uniffi.kovanica_light.createHdWallet
 import uniffi.kovanica_light.createWallet
+import uniffi.kovanica_light.deriveAccount
 import uniffi.kovanica_light.faucetAllowed
+import uniffi.kovanica_light.importHdWallet
 import uniffi.kovanica_light.importWallet
+import uniffi.kovanica_light.lock
+import uniffi.kovanica_light.signTransferHd
 import uniffi.kovanica_light.signTransferRaw
 import uniffi.kovanica_light.verifyHeader
 import uniffi.kovanica_light.walletAddress
@@ -70,6 +75,8 @@ class MainActivity : Activity() {
     private lateinit var faucetField: EditText
     private lateinit var faucetRow: LinearLayout
     private lateinit var passField: EditText
+    private lateinit var bip39PassField: EditText
+    private lateinit var accountIndexField: EditText
     private lateinit var mnemonicField: EditText
     private lateinit var toField: EditText
     private lateinit var toValidation: TextView
@@ -164,7 +171,13 @@ class MainActivity : Activity() {
         passField = field("Passphrase", "").apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
-        mnemonicField = field("24-word seed (import)", "", mono = true).apply {
+        bip39PassField = field("BIP-39 passphrase (optional, HD)", "").apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        accountIndexField = field("HD account index (0, 1, …)", hdAccountIndex().toString(), mono = true).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+        }
+        mnemonicField = field("12- or 24-word seed (import)", "", mono = true).apply {
             isSingleLine = false
             maxLines = 3
             gravity = Gravity.TOP or Gravity.START
@@ -240,10 +253,16 @@ class MainActivity : Activity() {
                 caption("Uses the passphrase at the top. The seed stays on this phone."),
                 0,
             )
-            addStack(button("Create wallet") { onCreateWallet() }, 12)
+            addStack(button("Create HD wallet (24 words)") { onCreateHdWallet(24u) }, 12)
+            addStack(button("Create HD wallet (12 words)", filled = false) { onCreateHdWallet(12u) }, 8)
+            addStack(button("Create legacy wallet", filled = false) { onCreateWallet() }, 8)
             addStack(caption("Or import an existing wallet from its seed."), 16)
             addStack(mnemonicField, 8)
-            addStack(button("Import wallet", filled = false) { onImportWallet() }, 10)
+            addStack(bip39PassField, 8)
+            addStack(accountIndexField, 8)
+            addStack(button("Import HD wallet") { onImportHdWallet() }, 10)
+            addStack(button("Import legacy wallet", filled = false) { onImportWallet() }, 8)
+            addStack(button("Derive HD account", filled = false) { onDeriveHdAccount() }, 8)
         }
 
         val sendCard = card().apply {
@@ -376,7 +395,9 @@ class MainActivity : Activity() {
     /** Drop the passphrase and any pasted seed once the app leaves the screen. */
     private fun clearSecrets() {
         if (::passField.isInitialized) passField.setText("")
+        if (::bip39PassField.isInitialized) bip39PassField.setText("")
         if (::mnemonicField.isInitialized) mnemonicField.setText("")
+        runCatching { lock() }
     }
 
     override fun onResume() {
@@ -519,6 +540,30 @@ class MainActivity : Activity() {
 
     // --- actions -------------------------------------------------------------------------
 
+    private fun onCreateHdWallet(wordCount: UInt) {
+        val passphrase = passField.text.toString()
+        background(
+            label = "Creating HD wallet ($wordCount words) — this takes a few seconds…",
+            done = { line ->
+                pushStatus(line)
+                onWalletChanged()
+                if (line.tone == Tone.OK) showTab(Tab.WALLET)
+            },
+        ) { _ ->
+            val created = createHdWallet(wordCount, passphrase)
+            prefs().edit()
+                .putString("keystore", created.keystoreJson)
+                .putBoolean("is_hd", true)
+                .putInt("hd_account_index", 0)
+                .putString("hd_active_address", created.address)
+                .apply()
+            ok(
+                "HD wallet created (m/44'/3007'/0'/0'/0').\naddress ${created.address}\n" +
+                    "seed words (shown once, write them down):\n${created.mnemonic}",
+            )
+        }
+    }
+
     private fun onCreateWallet() {
         val passphrase = passField.text.toString()
         background(
@@ -530,11 +575,74 @@ class MainActivity : Activity() {
             },
         ) { _ ->
             val created = createWallet(passphrase)
-            prefs().edit().putString("keystore", created.keystoreJson).apply()
+            prefs().edit()
+                .putString("keystore", created.keystoreJson)
+                .putBoolean("is_hd", false)
+                .remove("hd_active_address")
+                .apply()
             ok(
                 "Wallet created.\naddress ${created.address}\n" +
                     "seed words (shown once, write them down):\n${created.mnemonic}",
             )
+        }
+    }
+
+    private fun onImportHdWallet() {
+        val passphrase = passField.text.toString()
+        val bip39Pass = bip39PassField.text.toString()
+        val accountIndex = accountIndexField.text.toString().trim().toUIntOrNull() ?: 0u
+        val seed = mnemonicField.text.toString().trim()
+        if (seed.isEmpty()) {
+            setStatus("Paste the 12- or 24-word seed before importing.", Tone.ERROR)
+            return
+        }
+        background(
+            label = "Importing HD wallet…",
+            done = { line ->
+                pushStatus(line)
+                if (line.tone == Tone.OK) {
+                    mnemonicField.setText("")
+                    showTab(Tab.WALLET)
+                }
+                onWalletChanged()
+            },
+        ) { _ ->
+            val imported = importHdWallet(seed, passphrase)
+            val derivedAddress = if (bip39Pass.isNotEmpty() || accountIndex != 0u) {
+                deriveAccount(imported.keystoreJson, passphrase, bip39Pass, accountIndex)
+            } else {
+                imported.address
+            }
+            prefs().edit()
+                .putString("keystore", imported.keystoreJson)
+                .putBoolean("is_hd", true)
+                .putInt("hd_account_index", accountIndex.toInt())
+                .putString("hd_active_address", derivedAddress)
+                .apply()
+            ok("HD wallet imported (m/44'/3007'/$accountIndex'/0'/0').\naddress $derivedAddress")
+        }
+    }
+
+    private fun onDeriveHdAccount() {
+        val passphrase = passField.text.toString()
+        val bip39Pass = bip39PassField.text.toString()
+        val accountIndex = accountIndexField.text.toString().trim().toUIntOrNull() ?: 0u
+        background(
+            label = "Deriving HD account $accountIndex…",
+            done = { line ->
+                pushStatus(line)
+                onWalletChanged()
+                if (line.tone == Tone.OK) showTab(Tab.WALLET)
+            },
+        ) { _ ->
+            val keystore = keystore()
+            val address = deriveAccount(keystore, passphrase, bip39Pass, accountIndex)
+            prefs().edit()
+                .putBoolean("is_hd", true)
+                .putInt("hd_account_index", accountIndex.toInt())
+                .putString("hd_active_address", address)
+                .apply()
+            ok("Derived Account $accountIndex (m/44'/3007'/$accountIndex'/0'/0').\naddress $address")
         }
     }
 
@@ -557,7 +665,11 @@ class MainActivity : Activity() {
             },
         ) { _ ->
             val imported = importWallet(seed, passphrase)
-            prefs().edit().putString("keystore", imported.keystoreJson).apply()
+            prefs().edit()
+                .putString("keystore", imported.keystoreJson)
+                .putBoolean("is_hd", false)
+                .remove("hd_active_address")
+                .apply()
             ok("Wallet imported.\naddress ${imported.address}")
         }
     }
@@ -604,7 +716,7 @@ class MainActivity : Activity() {
     private fun balance() {
         background("Reading balance…") { env ->
             val keystore = keystore()
-            val address = walletAddress(keystore)
+            val address = activeWalletAddress(keystore)
             val proof = client(env).call("kovanica_getAccountProof", JSONArray().put(address))
             if (proof == null) {
                 return@background warn("address $address\nbalance unverified (no account proof)")
@@ -623,7 +735,7 @@ class MainActivity : Activity() {
             work = { env ->
                 val node = client(env)
                 val height = node.blockNumber()
-                val address = keystoreOrNull()?.let { walletAddress(it) }
+                val address = keystoreOrNull()?.let { activeWalletAddress(it) }
                 val body = buildString {
                     append("chain id ${env.chainId}  ·  ${env.network}")
                     append('\n')
@@ -710,14 +822,31 @@ class MainActivity : Activity() {
     }
 
     private fun broadcastSend(toHex: String, amount: ULong, rate: ULong, passphrase: String) {
+        val bip39Pass = bip39PassField.text.toString()
+        val accountIdx = accountIndexField.text.toString().trim().toUIntOrNull() ?: hdAccountIndex()
         background("Sending…") { env ->
             val keystore = keystore()
-            val address = walletAddress(keystore)
+            val address = activeWalletAddress(keystore)
             val node = client(env)
             val nonce = parseQuantity(node.call("kovanica_getNonce", JSONArray().put(address)))
             val recipient = KvncAddress.canonical(toHex)
                 ?: return@background Line("Enter a valid recipient address.", Tone.ERROR)
-            val raw = signTransferRaw(keystore, passphrase, env.chainId, recipient, amount, nonce, rate)
+            val raw = if (isHdWallet()) {
+                val fee = (rate * 250uL).coerceAtLeast(1uL)
+                signTransferHd(
+                    keystore,
+                    passphrase,
+                    bip39Pass,
+                    accountIdx,
+                    recipient,
+                    amount,
+                    fee,
+                    nonce,
+                    env.chainId,
+                )
+            } else {
+                signTransferRaw(keystore, passphrase, env.chainId, recipient, amount, nonce, rate)
+            }
             val hash = node.call("kovanica_sendRawTransaction", JSONArray().put(raw))
             record(
                 kind = HistoryEntry.KIND_SEND,
@@ -732,7 +861,7 @@ class MainActivity : Activity() {
 
     private fun faucet() {
         background("Requesting faucet…") { env ->
-            val address = walletAddress(keystore())
+            val address = activeWalletAddress(keystore())
             val result = client(env).postFaucet(address)
             HistoryStore.extractTxHash(result)?.let { hash ->
                 record(kind = HistoryEntry.KIND_FAUCET, hash = hash)
@@ -844,7 +973,7 @@ class MainActivity : Activity() {
     /** Background half of [refreshWallet]; never throws. */
     private fun readWallet(env: Env, keystore: String, contracts: List<String>): WalletSnapshot {
         val display = try {
-            walletAddress(keystore)
+            activeWalletAddress(keystore)
         } catch (error: Exception) {
             return WalletSnapshot(
                 OverviewState.Failed(error.message ?: "the keystore couldn't be read"),
@@ -953,7 +1082,7 @@ class MainActivity : Activity() {
             null
         } else {
             try {
-                walletAddress(keystore)
+                activeWalletAddress(keystore)
             } catch (_: Exception) {
                 null
             }
@@ -1936,6 +2065,18 @@ class MainActivity : Activity() {
     private fun keystoreOrNull(): String? = prefs().getString("keystore", null)
 
     private fun keystore(): String = keystoreOrNull() ?: error("Create or import a wallet first.")
+
+    private fun isHdWallet(): Boolean = prefs().getBoolean("is_hd", false)
+
+    private fun hdAccountIndex(): UInt = prefs().getInt("hd_account_index", 0).coerceAtLeast(0).toUInt()
+
+    private fun activeWalletAddress(keystoreJson: String): String {
+        if (isHdWallet()) {
+            val active = prefs().getString("hd_active_address", null)
+            if (!active.isNullOrBlank()) return active
+        }
+        return walletAddress(keystoreJson)
+    }
 
     /**
      * Append one row to the local history for the active network. Called from the
