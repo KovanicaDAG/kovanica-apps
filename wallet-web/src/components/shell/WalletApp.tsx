@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { formatAtoms, formatKvnc } from "@/core/format";
 import type { TxPreview } from "@/core/session";
+import { AddressBook } from "@/components/contacts/AddressBook";
 import { PRESETS, chainName, presetById } from "@/lib/networks";
 import { broadcast, indexerLogs, probeNode, readAccount, receipt } from "@/services/rpc";
-import { signReviewed } from "@/services/wallet";
-import { addAccount, forgetDevice, loadVault, lock, selectAccount } from "@/services/wallet";
+import { onWalletLock } from "@/services/tauri";
+import { addAccount, clearBackup, forgetDevice, isDesktopShell, loadVault, lock, lockUi, refreshDesktopSession, selectAccount, signReviewed, subscribeBackup } from "@/services/wallet";
 import { useActivity } from "@/stores/activity";
 import { signingLock, useNetwork } from "@/stores/network";
 import { useSession } from "@/stores/session";
@@ -23,15 +24,29 @@ export function WalletApp() {
   const [tab, setTab] = useState<Tab>("home");
   const [preview, setPreview] = useState<TxPreview | null>(null);
   const [signing, setSigning] = useState(false);
+  const [backup, setBackup] = useState<string | null>(null);
   const session = useSession();
   const net = useNetwork();
   const lockState = signingLock(net);
   const account = session.accounts[session.active];
 
   useEffect(() => {
-    useSession.getState().hydrate(loadVault());
+    const stopBackup = subscribeBackup(setBackup);
+    let stopLock = () => {};
+    if (isDesktopShell()) {
+      void refreshDesktopSession();
+      void onWalletLock(() => lockUi()).then((stop) => {
+        stopLock = stop;
+      });
+    } else {
+      useSession.getState().hydrate(loadVault());
+    }
     useActivity.getState().hydrate();
     setReady(true);
+    return () => {
+      stopBackup();
+      stopLock();
+    };
   }, []);
 
   useEffect(() => {
@@ -93,7 +108,7 @@ export function WalletApp() {
     if (!preview || lockState.locked) return;
     setSigning(true);
     try {
-      const signed = signReviewed(preview);
+      const signed = await signReviewed(preview);
       const preset = presetById(net.presetId);
       const hash = await broadcast(preset.rpcUrl, signed.raw);
       useActivity.getState().push({
@@ -163,6 +178,19 @@ export function WalletApp() {
           </nav>
         </aside>
         <section className="px-5 py-6">
+          <div className="mb-5 flex gap-2 overflow-x-auto">
+            {session.accounts.map((item, index) => (
+              <button key={`${item.pathLabel}-${index}`} type="button" className={`min-h-11 shrink-0 rounded-full border px-4 text-left text-sm ${index === session.active ? "border-copper text-paper" : "border-line text-muted"}`} onClick={() => selectAccount(index)}>
+                <span className="block">{item.pathLabel === "Legacy account" ? "Legacy account" : `Account ${item.account}`}</span>
+                <span className="block text-xs">{item.pathLabel}</span>
+              </button>
+            ))}
+            {session.kind === "hd" ? (
+              <button type="button" className="min-h-11 shrink-0 rounded-full border border-line px-4 text-sm text-paper" onClick={() => void addAccount().catch((error: unknown) => toast(error instanceof Error ? error.message : "Could not add an account"))}>
+                Add account
+              </button>
+            ) : null}
+          </div>
           {tab === "home" ? (
             <div className="grid gap-5">
               <p className="text-sm text-muted">{account?.pathLabel}</p>
@@ -170,18 +198,6 @@ export function WalletApp() {
               <p className="text-5xl font-semibold tabular-nums">{net.balanceAtoms == null ? "—" : formatKvnc(net.balanceAtoms)}</p>
               <p className="text-muted">{net.balanceAtoms == null ? "Balance unavailable" : `${formatAtoms(net.balanceAtoms)} atoms`}</p>
               <p className="mono text-sm break-all">{account?.address}</p>
-              <div className="flex flex-wrap gap-2">
-                {session.accounts.map((item, index) => (
-                  <button key={item.address} type="button" className={`min-h-11 rounded-full border px-4 text-sm ${index === session.active ? "border-copper text-paper" : "border-line text-muted"}`} onClick={() => selectAccount(index)}>
-                    {item.pathLabel === "Legacy account" ? "Legacy" : `Account ${item.account}`}
-                  </button>
-                ))}
-                {session.kind === "hd" ? (
-                  <button type="button" className="min-h-11 rounded-full border border-line px-4 text-sm text-paper" onClick={() => void addAccount()}>
-                    Add account
-                  </button>
-                ) : null}
-              </div>
               <div className="flex gap-3">
                 <button type="button" className="min-h-11 rounded-full bg-copper px-5 font-medium text-copper-ink" onClick={() => setTab("send")}>Send</button>
                 <button type="button" className="min-h-11 rounded-full border border-line px-5" onClick={() => setTab("receive")}>Receive</button>
@@ -191,8 +207,9 @@ export function WalletApp() {
                 Indexer URL, optional
                 <input className="min-h-11 rounded-2xl border border-line bg-surface px-4 text-paper" value={net.indexerUrl} onChange={(e) => useNetwork.getState().setIndexerUrl(e.target.value)} placeholder="https://indexer.kovanica.online/logs" />
               </label>
+              <AddressBook />
               <button type="button" className="w-fit text-sm text-clay" onClick={() => { forgetDevice(); }}>
-                Remove wallet from this browser
+                {isDesktopShell() ? "Lock the desktop wallet" : "Remove wallet from this browser"}
               </button>
               <p className="text-xs text-muted">Chain {net.probedChainId ?? "—"} · expected {presetById(net.presetId).expectedChainId ?? "reported"} · {chainName(net.probedChainId)}</p>
             </div>
@@ -204,6 +221,18 @@ export function WalletApp() {
         </section>
       </div>
       {preview ? <ConfirmTx preview={preview} busy={signing} onCancel={() => setPreview(null)} onConfirm={() => void confirm()} /> : null}
+      {backup ? (
+        <div className="fixed inset-0 z-40 grid place-items-center bg-ink/90 p-5">
+          <div className="w-full max-w-lg rounded-card border border-line bg-surface p-5">
+            <h2 className="text-2xl font-semibold">Write down this phrase</h2>
+            <p className="mt-2 text-sm text-muted">This is the only time the desktop signer shows it. It is cleared when the wallet locks.</p>
+            <p className="mono mt-4 text-sm break-words text-paper">{backup}</p>
+            <button type="button" className="mt-5 min-h-12 w-full rounded-full bg-copper font-medium text-copper-ink" onClick={() => clearBackup()}>
+              I wrote it down
+            </button>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

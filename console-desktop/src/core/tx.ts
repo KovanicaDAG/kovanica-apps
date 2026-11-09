@@ -3,12 +3,7 @@ import { blake3 } from "@noble/hashes/blake3.js";
 import * as ed from "@noble/ed25519";
 import { asciiPad, bytesToHex, concat, equalBytes, u32le, u64le, wipe } from "./bytes";
 
-if ((ed as any).hashes) {
-  (ed as any).hashes.sha512 = sha512;
-}
-if ((ed as any).etc) {
-  (ed as any).etc.sha512Sync = (...messages: Uint8Array[]) => sha512(concat(messages));
-}
+ed.hashes.sha512 = sha512;
 
 const TX_DOMAIN = asciiPad("KUNA/tx/v1", 16);
 const TX_KEY = asciiPad("KUNA-TX-v1", 32);

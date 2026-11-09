@@ -684,13 +684,21 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_contract_address_for_raw(
     ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_create_hd_wallet(
+    ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_create_wallet(
+    ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_derive_account(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_derive_comms_id(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_faucet_allowed(
     ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_import_hd_wallet(
+    ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_import_wallet(
+    ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_lock(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_registry_decode_entry(
     ): Int
@@ -707,6 +715,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_kovanica_light_ffi_checksum_func_sign_detached(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_sign_exit_raw(
+    ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_sign_transfer_hd(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_sign_transfer_raw(
     ): Int
@@ -743,14 +753,22 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_contract_address_for_raw(`senderHex`: RustBuffer.ByValue,`nonce`: Long,`chainId`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_create_hd_wallet(`wordCount`: Int,`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_create_wallet(`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_derive_account(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`bip39Passphrase`: RustBuffer.ByValue,`accountIndex`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_derive_comms_id(`pubkeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_faucet_allowed(`chainId`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_kovanica_light_ffi_fn_func_import_hd_wallet(`mnemonic`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_import_wallet(`mnemonic`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_lock(uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_kovanica_light_ffi_fn_func_registry_decode_entry(`valueHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_registry_slot_hex(`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -766,6 +784,8 @@ internal object UniffiLib {
     external fun uniffi_kovanica_light_ffi_fn_func_sign_detached(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`messageHex`: RustBuffer.ByValue,`domain`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_sign_exit_raw(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`chainId`: Long,`nonce`: Long,`feeRate`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_sign_transfer_hd(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`bip39Passphrase`: RustBuffer.ByValue,`accountIndex`: Int,`toAddress`: RustBuffer.ByValue,`amount`: Long,`fee`: Long,`nonce`: Long,`chainId`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_sign_transfer_raw(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`chainId`: Long,`to`: RustBuffer.ByValue,`amount`: Long,`nonce`: Long,`feeRate`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -914,7 +934,13 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_kovanica_light_ffi_checksum_func_contract_address_for_raw() != 59815) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_create_hd_wallet() != 60552) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_create_wallet() != 1575) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_derive_account() != 391) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_derive_comms_id() != 30377) {
@@ -923,7 +949,13 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_kovanica_light_ffi_checksum_func_faucet_allowed() != 22913) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_import_hd_wallet() != 50109) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_import_wallet() != 17509) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_lock() != 53030) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_registry_decode_entry() != 1486) {
@@ -948,6 +980,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_sign_exit_raw() != 27104) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_sign_transfer_hd() != 58106) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_sign_transfer_raw() != 35272) {
@@ -1057,6 +1092,29 @@ object UniffiWithHandle
  * @suppress
  * */
 object NoHandle
+
+/**
+ * @suppress
+ */
+public object FfiConverterUInt: FfiConverter<UInt, Int> {
+    override fun lift(value: Int): UInt {
+        return value.toUInt()
+    }
+
+    override fun read(buf: ByteBuffer): UInt {
+        return lift(buf.getInt())
+    }
+
+    override fun lower(value: UInt): Int {
+        return value.toInt()
+    }
+
+    override fun allocationSize(value: UInt) = 4UL
+
+    override fun write(value: UInt, buf: ByteBuffer) {
+        buf.putInt(value.toInt())
+    }
+}
 
 /**
  * @suppress
@@ -1622,6 +1680,22 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
     
 
         /**
+         * Create an HD wallet with 12 or 24 words and encrypt it. Runs Argon2id.
+         */
+    @Throws(LightFfiException::class) fun `createHdWallet`(`wordCount`: kotlin.UInt, `passphrase`: kotlin.String): CreatedWallet {
+            return FfiConverterTypeCreatedWallet.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_create_hd_wallet(
+    
+        
+        FfiConverterUInt.lower(`wordCount`),
+        FfiConverterString.lower(`passphrase`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Create a 24-word wallet and encrypt it. Runs Argon2id.
          */
     @Throws(LightFfiException::class) fun `createWallet`(`passphrase`: kotlin.String): CreatedWallet {
@@ -1631,6 +1705,24 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
     
         
         FfiConverterString.lower(`passphrase`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Derive an account address at m/44'/3007'/<account_index>'/0'/0' from an encrypted keystore.
+         */
+    @Throws(LightFfiException::class) fun `deriveAccount`(`keystoreJson`: kotlin.String, `passphrase`: kotlin.String, `bip39Passphrase`: kotlin.String, `accountIndex`: kotlin.UInt): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_derive_account(
+    
+        
+        FfiConverterString.lower(`keystoreJson`),
+        FfiConverterString.lower(`passphrase`),
+        FfiConverterString.lower(`bip39Passphrase`),
+        FfiConverterUInt.lower(`accountIndex`),_status)
 }
     )
     }
@@ -1670,6 +1762,22 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
     
 
         /**
+         * Import an existing 12- or 24-word BIP-39 mnemonic into an HD keystore. Runs Argon2id.
+         */
+    @Throws(LightFfiException::class) fun `importHdWallet`(`mnemonic`: kotlin.String, `passphrase`: kotlin.String): ImportedWallet {
+            return FfiConverterTypeImportedWallet.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_import_hd_wallet(
+    
+        
+        FfiConverterString.lower(`mnemonic`),
+        FfiConverterString.lower(`passphrase`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Import a 24-word seed and encrypt it. Runs Argon2id.
          */
     @Throws(LightFfiException::class) fun `importWallet`(`mnemonic`: kotlin.String, `passphrase`: kotlin.String): ImportedWallet {
@@ -1683,6 +1791,18 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
 }
     )
     }
+    
+
+        /**
+         * Lock the session (memory clearing barrier).
+         */ fun `lock`()
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_lock(
+    
+        _status)
+}
+    
     
 
         /**
@@ -1855,6 +1975,29 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         FfiConverterULong.lower(`chainId`),
         FfiConverterULong.lower(`nonce`),
         FfiConverterULong.lower(`feeRate`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Sign a transfer using an HD-derived account key. Returns broadcast hex with no 0x prefix.
+         */
+    @Throws(LightFfiException::class) fun `signTransferHd`(`keystoreJson`: kotlin.String, `passphrase`: kotlin.String, `bip39Passphrase`: kotlin.String, `accountIndex`: kotlin.UInt, `toAddress`: kotlin.String, `amount`: kotlin.ULong, `fee`: kotlin.ULong, `nonce`: kotlin.ULong, `chainId`: kotlin.ULong): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_sign_transfer_hd(
+    
+        
+        FfiConverterString.lower(`keystoreJson`),
+        FfiConverterString.lower(`passphrase`),
+        FfiConverterString.lower(`bip39Passphrase`),
+        FfiConverterUInt.lower(`accountIndex`),
+        FfiConverterString.lower(`toAddress`),
+        FfiConverterULong.lower(`amount`),
+        FfiConverterULong.lower(`fee`),
+        FfiConverterULong.lower(`nonce`),
+        FfiConverterULong.lower(`chainId`),_status)
 }
     )
     }

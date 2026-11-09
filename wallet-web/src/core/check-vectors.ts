@@ -1,5 +1,7 @@
+import { blake3 } from "@noble/hashes/blake3.js";
 import { checkAddress, decodeAddress, encodeAddress } from "./address";
-import { bytesToHex, hexToBytes } from "./bytes";
+import { asciiPad, bytesToHex, concat, hexToBytes, u64le } from "./bytes";
+import { buildContractCall } from "./contracts";
 import { bip39Seed, deriveBip44, deriveHardened, entropyFromPhrase, generatePhrase, hdPrivateKey, isValidMnemonic, masterFromSeed } from "./hd";
 import { encodeRawTransaction, publicKeyFromSeed, signHash, signingHash } from "./tx";
 
@@ -69,5 +71,68 @@ if (checkAddress(`kvnc${"ab".repeat(32)}dag`, 1).ok) throw new Error("chain 1 ac
 if (checkAddress("0x" + "11".repeat(32), 5).ok) throw new Error("chain 5 accepted hex");
 if (!checkAddress("0x" + "11".repeat(32), 4).ok) throw new Error("chain 4 rejected legacy hex");
 if (!checkAddress("0x" + "11".repeat(32), 1337).ok) throw new Error("local rejected legacy hex");
+
+const recipient = encodeAddress(to);
+const base = {
+  chainId: 1,
+  recipient,
+  account: recipient,
+  amountAtoms: null as bigint | null,
+  tokenUnits: null as bigint | null,
+  hashlock: "",
+  timelockHeight: null as bigint | null,
+  lockId: null as bigint | null,
+  secretPreimage: "",
+  proposalId: null as bigint | null,
+  callDataHex: "",
+};
+const withdraw = buildContractCall({ ...base, contract: "vault", method: "withdraw", amountAtoms: 1000n });
+if (bytesToHex(withdraw.args) !== bytesToHex(concat([to, u64le(1000n)]))) throw new Error("vault withdraw args");
+const claimed = buildContractCall({ ...base, contract: "vault", method: "claim" });
+if (claimed.args.length !== 0) throw new Error("vault claim should have no args");
+
+const hashlock = new Uint8Array(32).fill(0x44);
+const locked = buildContractCall({ ...base, contract: "htlc", method: "lock", hashlock: bytesToHex(hashlock), timelockHeight: 9n });
+if (bytesToHex(locked.args) !== bytesToHex(concat([to, hashlock, u64le(9n)]))) throw new Error("htlc lock args");
+const secret = new Uint8Array(32).fill(0x55);
+const claimedLock = buildContractCall({ ...base, contract: "htlc", method: "claim", lockId: 7n, secretPreimage: bytesToHex(secret) });
+if (bytesToHex(claimedLock.args) !== bytesToHex(concat([u64le(7n), secret]))) throw new Error("htlc claim args");
+const refunded = buildContractCall({ ...base, contract: "htlc", method: "refund", lockId: 7n });
+if (bytesToHex(refunded.args) !== bytesToHex(u64le(7n))) throw new Error("htlc refund args");
+
+const proposed = buildContractCall({ ...base, contract: "multisig", method: "propose", amountAtoms: 42n });
+if (bytesToHex(proposed.args) !== bytesToHex(concat([to, u64le(42n), u64le(0n)]))) throw new Error("multisig propose args");
+const approved = buildContractCall({ ...base, contract: "multisig", method: "approve", proposalId: 3n });
+if (bytesToHex(approved.args) !== bytesToHex(u64le(3n))) throw new Error("multisig approve args");
+const moved = buildContractCall({ ...base, contract: "token", method: "transfer", tokenUnits: 5n });
+if (bytesToHex(moved.args) !== bytesToHex(concat([to, u64le(5n)]))) throw new Error("token transfer args");
+const minted = buildContractCall({ ...base, contract: "token", method: "mint", tokenUnits: 8n });
+if (bytesToHex(minted.args) !== bytesToHex(concat([to, u64le(8n)]))) throw new Error("token mint args");
+
+const contractKey = new Uint8Array(32).fill(0x33);
+const callTx = {
+  sender,
+  nonce: 1n,
+  fee: 10n,
+  kind: { type: "call" as const, contract: contractKey, value: 0n, method: "withdraw", args: withdraw.args, gasLimit: 100000n },
+};
+const methodBytes = new TextEncoder().encode("withdraw");
+const kindBytes = concat([
+  Uint8Array.of(4),
+  contractKey,
+  u64le(0n),
+  u64le(BigInt(methodBytes.length)),
+  methodBytes,
+  u64le(BigInt(withdraw.args.length)),
+  withdraw.args,
+  u64le(100000n),
+]);
+if (kindBytes[0] !== 4) throw new Error("signing kind tag is not 4");
+const preimage = concat([asciiPad("KUNA/tx/v1", 16), u64le(2n), sender, u64le(1n), kindBytes, u64le(10n)]);
+const keyed = blake3(preimage, { key: asciiPad("KUNA-TX-v1", 32) });
+if (bytesToHex(keyed) !== bytesToHex(signingHash(callTx, 2))) throw new Error("call sighash mismatch");
+const rawCall = encodeRawTransaction(callTx, signature, keyed);
+const wire = hexToBytes(rawCall).slice(40, 44);
+if (bytesToHex(wire) !== "06000000") throw new Error(`wire kind ${bytesToHex(wire)}`);
 
 console.log("vectors ok", address);

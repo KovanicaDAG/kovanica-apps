@@ -76,6 +76,8 @@ export function derivePublicAccount(ref: AccountRef): PublicAccount {
   }
 }
 
+export type PreviewDetail = { label: string; value: string; mono?: boolean };
+
 export type TxPreview = {
   kind: "transfer" | "call";
   sender: string;
@@ -90,6 +92,7 @@ export type TxPreview = {
   gasLimit: string;
   valueAtoms: string;
   pathLabel: string;
+  details: PreviewDetail[];
 };
 
 function assertU64(value: bigint, label: string): void {
@@ -124,6 +127,7 @@ export function previewTransfer(input: {
     gasLimit: "0",
     valueAtoms: "0",
     pathLabel: input.from.pathLabel,
+    details: [],
   };
 }
 
@@ -138,6 +142,7 @@ export function previewCall(input: {
   nonce: bigint;
   chainId: number;
   networkName: string;
+  details: PreviewDetail[];
 }): TxPreview {
   decodeRecipient(input.contract, input.chainId);
   if (!input.method.trim()) throw new Error("method must not be empty");
@@ -159,6 +164,7 @@ export function previewCall(input: {
     gasLimit: input.gasLimit.toString(),
     valueAtoms: input.valueAtoms.toString(),
     pathLabel: input.from.pathLabel,
+    details: input.details,
   };
 }
 

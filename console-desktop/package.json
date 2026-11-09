@@ -13,7 +13,12 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.1.1"
+    "@noble/ciphers": "^2.0.0",
+    "@noble/ed25519": "^3.0.0",
+    "@noble/hashes": "^2.0.0",
+    "@scure/bip39": "^2.0.0",
+    "@tauri-apps/api": "^2.1.1",
+    "hash-wasm": "^4.13.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.1.0",

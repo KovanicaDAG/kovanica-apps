@@ -17,6 +17,8 @@ type SessionState = {
   hydrate: (file: VaultFile | null) => void;
   setUnlocked: (accounts: PublicAccount[], active: number) => void;
   setAccounts: (accounts: PublicAccount[], active: number) => void;
+  openSession: (input: { kind: VaultKind; wordCount: 12 | 24 | null; usesBip39Passphrase: boolean; accounts: PublicAccount[]; active: number }) => void;
+  showLocked: (input: { kind: VaultKind; wordCount: 12 | 24 | null; usesBip39Passphrase: boolean; accounts: PublicAccount[] }) => void;
   lock: () => void;
 };
 
@@ -54,5 +56,7 @@ export const useSession = create<SessionState>((set) => ({
     ),
   setUnlocked: (accounts, active) => set({ status: "unlocked", accounts, active, error: null }),
   setAccounts: (accounts, active) => set({ accounts, active }),
+  openSession: (input) => set({ status: "unlocked", error: null, busy: null, ...input }),
+  showLocked: (input) => set({ status: "locked", error: null, busy: null, active: 0, ...input }),
   lock: () => set({ status: "locked", error: null, busy: null }),
 }));
