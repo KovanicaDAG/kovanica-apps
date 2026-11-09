@@ -538,6 +538,108 @@ impl WalletStore {
         .map_err(|err| map_ffi_error(&err))
     }
 
+    /// Sign a reviewed HD contract call from the unlocked session.
+    /// Uses sighash tag `4` and wire index `6` (`TransactionKind::Call`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn sign_call_hd(
+        &mut self,
+        path: &Path,
+        bip39_passphrase: &str,
+        account_index: u32,
+        contract_address: &str,
+        method: &str,
+        args_hex: &str,
+        value: u64,
+        gas_limit: u64,
+        fee: u64,
+        nonce: u64,
+        chain_id: u64,
+        now: Instant,
+    ) -> Result<String, String> {
+        let method = method.trim();
+        if method.is_empty() {
+            return Err("Enter a contract method.".to_string());
+        }
+        let pass = self.session(now)?.passphrase.clone();
+        let json = read_keystore(path)?;
+        let keystore = kovanica_keystore::parse(json.as_bytes())
+            .map_err(|_| "Could not read the wallet.".to_string())?;
+        let vault = kovanica_wallet_core::keystore_vault::VaultPayload::decrypt(
+            &keystore,
+            pass.as_str(),
+        )
+        .map_err(|_| "Wrong password.".to_string())?;
+        let account = vault
+            .to_account(bip39_passphrase, account_index)
+            .map_err(|err| err.to_string())?;
+        let contract = kovanica_keystore::parse_address(contract_address, "contract", chain_id)
+            .map_err(|err| err.to_string())?;
+        let args = decode_call_args_hex(args_hex)?;
+        let tx = account.sign_call(
+            &kovanica_types::SigningContext::new(chain_id),
+            contract,
+            value,
+            method.to_string(),
+            args,
+            gas_limit,
+            nonce,
+            fee,
+        );
+        let raw = bincode::serialize(&tx)
+            .map_err(|_| "Could not encode the contract call.".to_string())?;
+        Ok(hex::encode(raw))
+    }
+
+    /// Sign a reviewed legacy contract call from the unlocked session.
+    /// Uses sighash tag `4` and wire index `6` (`TransactionKind::Call`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn sign_call(
+        &mut self,
+        path: &Path,
+        contract_address: &str,
+        method: &str,
+        args_hex: &str,
+        value: u64,
+        gas_limit: u64,
+        fee: u64,
+        nonce: u64,
+        chain_id: u64,
+        now: Instant,
+    ) -> Result<String, String> {
+        let method = method.trim();
+        if method.is_empty() {
+            return Err("Enter a contract method.".to_string());
+        }
+        let pass = self.session(now)?.passphrase.clone();
+        let json = read_keystore(path)?;
+        let keystore = kovanica_keystore::parse(json.as_bytes())
+            .map_err(|_| "Could not read the wallet.".to_string())?;
+        let vault = kovanica_wallet_core::keystore_vault::VaultPayload::decrypt(
+            &keystore,
+            pass.as_str(),
+        )
+        .map_err(|_| "Wrong password.".to_string())?;
+        let account = vault
+            .to_account("", 0)
+            .map_err(|err| err.to_string())?;
+        let contract = kovanica_keystore::parse_address(contract_address, "contract", chain_id)
+            .map_err(|err| err.to_string())?;
+        let args = decode_call_args_hex(args_hex)?;
+        let tx = account.sign_call(
+            &kovanica_types::SigningContext::new(chain_id),
+            contract,
+            value,
+            method.to_string(),
+            args,
+            gas_limit,
+            nonce,
+            fee,
+        );
+        let raw = bincode::serialize(&tx)
+            .map_err(|_| "Could not encode the contract call.".to_string())?;
+        Ok(hex::encode(raw))
+    }
+
     /// Check the password, then keep the session open. The phrase is wiped.
     ///
     /// A wrong password is counted with [`reveal`]. Guessing here does not
@@ -841,6 +943,18 @@ fn path_exists(path: &Path) -> Result<bool, String> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(_) => Err("Could not read the wallet.".to_string()),
     }
+}
+
+fn decode_call_args_hex(value: &str) -> Result<Vec<u8>, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let stripped = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+        .unwrap_or(trimmed);
+    hex::decode(stripped).map_err(|_| "Call arguments must be even-length hex.".to_string())
 }
 
 /// Accept a keystore only when `kovanica_keystore::parse` does.
@@ -1711,7 +1825,7 @@ mod tests {
         let body = include_str!("wallet.rs").split("mod tests").next().unwrap();
         assert!(!body.contains("CROSS_KEYSTORE_JSON"));
 
-        let ignore = include_str!("../../../../.gitleaksignore");
+        let ignore = include_str!("../../../.gitleaksignore");
         let historical = "62f487532da42ada4cd656ea3de1d89db0bb8ea0:apps/console-desktop/src-tauri/src/wallet.rs:generic-api-key:735";
         assert!(
             ignore.lines().any(|line| line.trim() == historical),
@@ -1767,5 +1881,67 @@ mod tests {
         );
         assert!(started.elapsed() < Duration::from_secs(3));
         assert!(!shared.lock_store().is_open_for_test());
+    }
+
+    #[test]
+    fn sign_call_hd_and_sign_call_produce_valid_wire_index_6_transactions() {
+        let dir = temp_dir("sign-call-hd");
+        let path = keystore_in(&dir);
+        let mut store = WalletStore::new();
+        let now = Instant::now();
+        let created = store
+            .create_hd(&path, 24, "call-password-123", now)
+            .expect("create hd wallet");
+        let raw_hd = store
+            .sign_call_hd(
+                &path,
+                "",
+                0,
+                &created.address,
+                "withdraw",
+                "01020304",
+                0,
+                100_000,
+                1_000,
+                1,
+                1,
+                now,
+            )
+            .expect("sign_call_hd");
+        assert!(!raw_hd.starts_with("0x"));
+        let decoded_hd = hex::decode(&raw_hd).expect("valid hex");
+        assert_eq!(&decoded_hd[40..44], &[6, 0, 0, 0]);
+        let tx_hd: kovanica_types::Transaction =
+            bincode::deserialize(&decoded_hd).expect("bincode tx");
+        assert!(tx_hd.verify_signature(&kovanica_types::SigningContext::new(1)));
+
+        let dir_leg = temp_dir("sign-call-legacy");
+        let path_leg = keystore_in(&dir_leg);
+        let mut store_leg = WalletStore::new();
+        let created_leg = store_leg
+            .create(&path_leg, "call-password-123", now)
+            .expect("create legacy wallet");
+        let raw_leg = store_leg
+            .sign_call(
+                &path_leg,
+                &created_leg.address,
+                "withdraw",
+                "01020304",
+                0,
+                100_000,
+                1_000,
+                1,
+                1,
+                now,
+            )
+            .expect("sign_call");
+        assert!(!raw_leg.starts_with("0x"));
+        let decoded_leg = hex::decode(&raw_leg).expect("valid hex");
+        assert_eq!(&decoded_leg[40..44], &[6, 0, 0, 0]);
+        let tx_leg: kovanica_types::Transaction =
+            bincode::deserialize(&decoded_leg).expect("bincode tx");
+        assert!(tx_leg.verify_signature(&kovanica_types::SigningContext::new(1)));
+        let _ = fs::remove_dir_all(dir);
+        let _ = fs::remove_dir_all(dir_leg);
     }
 }

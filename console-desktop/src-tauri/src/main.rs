@@ -257,6 +257,131 @@ fn wallet_sign_transfer_hd(
     })
 }
 
+fn parse_u64_json(value: &serde_json::Value, label: &str) -> Result<u64, String> {
+    match value {
+        serde_json::Value::Number(num) => num
+            .as_u64()
+            .ok_or_else(|| format!("Invalid {label}.")),
+        serde_json::Value::String(text) => parse_atom_string(text),
+        _ => Err(format!("Invalid {label}.")),
+    }
+}
+
+/// Sign a reviewed HD contract call from the unlocked session.
+/// Uses sighash tag `4` and wire index `6` (`TransactionKind::Call`).
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn wallet_sign_call_hd(
+    app: tauri::AppHandle,
+    state: State<'_, WalletApp>,
+    bip39_passphrase: Option<String>,
+    account_index: Option<u32>,
+    contract_address: Option<String>,
+    contract: Option<String>,
+    counterparty: Option<String>,
+    method: String,
+    args_hex: Option<String>,
+    args: Option<String>,
+    value: Option<serde_json::Value>,
+    value_atoms: Option<serde_json::Value>,
+    amount_atoms: Option<serde_json::Value>,
+    gas_limit: serde_json::Value,
+    fee: Option<serde_json::Value>,
+    fee_atoms: Option<serde_json::Value>,
+    nonce: serde_json::Value,
+    chain_id: u64,
+) -> Result<String, String> {
+    let path = wallet_file(&app)?;
+    let bip39_passphrase = Zeroizing::new(bip39_passphrase.unwrap_or_default());
+    let target = contract_address
+        .or(contract)
+        .or(counterparty)
+        .ok_or_else(|| "Enter a contract address.".to_string())?;
+    let calldata_hex = args_hex.or(args).unwrap_or_default();
+    let val_json = value
+        .or(value_atoms)
+        .or(amount_atoms)
+        .unwrap_or_else(|| serde_json::Value::from(0_u64));
+    let fee_json = fee
+        .or(fee_atoms)
+        .ok_or_else(|| "Enter a fee amount.".to_string())?;
+    let value_u64 = parse_u64_json(&val_json, "value")?;
+    let gas_u64 = parse_u64_json(&gas_limit, "gas limit")?;
+    let fee_u64 = parse_u64_json(&fee_json, "fee")?;
+    let nonce_u64 = parse_u64_json(&nonce, "nonce")?;
+    with_wallet(&state, |store| {
+        store.sign_call_hd(
+            &path,
+            bip39_passphrase.as_str(),
+            account_index.unwrap_or(0),
+            &target,
+            &method,
+            &calldata_hex,
+            value_u64,
+            gas_u64,
+            fee_u64,
+            nonce_u64,
+            chain_id,
+            Instant::now(),
+        )
+    })
+}
+
+/// Sign a reviewed legacy contract call from the unlocked session.
+/// Uses sighash tag `4` and wire index `6` (`TransactionKind::Call`).
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn wallet_sign_call(
+    app: tauri::AppHandle,
+    state: State<'_, WalletApp>,
+    contract_address: Option<String>,
+    contract: Option<String>,
+    counterparty: Option<String>,
+    method: String,
+    args_hex: Option<String>,
+    args: Option<String>,
+    value: Option<serde_json::Value>,
+    value_atoms: Option<serde_json::Value>,
+    amount_atoms: Option<serde_json::Value>,
+    gas_limit: serde_json::Value,
+    fee: Option<serde_json::Value>,
+    fee_atoms: Option<serde_json::Value>,
+    nonce: serde_json::Value,
+    chain_id: u64,
+) -> Result<String, String> {
+    let path = wallet_file(&app)?;
+    let target = contract_address
+        .or(contract)
+        .or(counterparty)
+        .ok_or_else(|| "Enter a contract address.".to_string())?;
+    let calldata_hex = args_hex.or(args).unwrap_or_default();
+    let val_json = value
+        .or(value_atoms)
+        .or(amount_atoms)
+        .unwrap_or_else(|| serde_json::Value::from(0_u64));
+    let fee_json = fee
+        .or(fee_atoms)
+        .ok_or_else(|| "Enter a fee amount.".to_string())?;
+    let value_u64 = parse_u64_json(&val_json, "value")?;
+    let gas_u64 = parse_u64_json(&gas_limit, "gas limit")?;
+    let fee_u64 = parse_u64_json(&fee_json, "fee")?;
+    let nonce_u64 = parse_u64_json(&nonce, "nonce")?;
+    with_wallet(&state, |store| {
+        store.sign_call(
+            &path,
+            &target,
+            &method,
+            &calldata_hex,
+            value_u64,
+            gas_u64,
+            fee_u64,
+            nonce_u64,
+            chain_id,
+            Instant::now(),
+        )
+    })
+}
+
 /// Open an existing wallet. A wrong password does not reveal the phrase.
 #[tauri::command]
 fn wallet_unlock(
@@ -498,6 +623,8 @@ fn main() {
             wallet_import_hd,
             wallet_derive_account,
             wallet_sign_transfer_hd,
+            wallet_sign_call_hd,
+            wallet_sign_call,
             wallet_unlock,
             wallet_reveal,
             wallet_lock,

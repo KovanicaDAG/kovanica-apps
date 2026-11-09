@@ -708,6 +708,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_sign_bond_raw(
     ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_sign_call_hd(
+    ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_sign_call_raw(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_sign_deploy_raw(
@@ -776,6 +778,8 @@ internal object UniffiLib {
     external fun uniffi_kovanica_light_ffi_fn_func_reveal_mnemonic_raw(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_sign_bond_raw(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`chainId`: Long,`stake`: Long,`nonce`: Long,`feeRate`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_sign_call_hd(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`bip39Passphrase`: RustBuffer.ByValue,`accountIndex`: Int,`contractAddress`: RustBuffer.ByValue,`method`: RustBuffer.ByValue,`argsHex`: RustBuffer.ByValue,`value`: Long,`gasLimit`: Long,`fee`: Long,`nonce`: Long,`chainId`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_sign_call_raw(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`chainId`: Long,`contract`: RustBuffer.ByValue,`value`: Long,`method`: RustBuffer.ByValue,`argsHex`: RustBuffer.ByValue,`gasLimit`: Long,`nonce`: Long,`feeRate`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -968,6 +972,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_sign_bond_raw() != 28793) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_sign_call_hd() != 20075) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_sign_call_raw() != 38764) {
@@ -1887,6 +1894,34 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         FfiConverterULong.lower(`stake`),
         FfiConverterULong.lower(`nonce`),
         FfiConverterULong.lower(`feeRate`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Sign a contract call using an HD-derived account key.
+         * Uses sighash tag `4` and wire index `6` (`TransactionKind::Call`).
+         * Returns broadcast hex with no `0x` prefix.
+         */
+    @Throws(LightFfiException::class) fun `signCallHd`(`keystoreJson`: kotlin.String, `passphrase`: kotlin.String, `bip39Passphrase`: kotlin.String, `accountIndex`: kotlin.UInt, `contractAddress`: kotlin.String, `method`: kotlin.String, `argsHex`: kotlin.String, `value`: kotlin.ULong, `gasLimit`: kotlin.ULong, `fee`: kotlin.ULong, `nonce`: kotlin.ULong, `chainId`: kotlin.ULong): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_sign_call_hd(
+    
+        
+        FfiConverterString.lower(`keystoreJson`),
+        FfiConverterString.lower(`passphrase`),
+        FfiConverterString.lower(`bip39Passphrase`),
+        FfiConverterUInt.lower(`accountIndex`),
+        FfiConverterString.lower(`contractAddress`),
+        FfiConverterString.lower(`method`),
+        FfiConverterString.lower(`argsHex`),
+        FfiConverterULong.lower(`value`),
+        FfiConverterULong.lower(`gasLimit`),
+        FfiConverterULong.lower(`fee`),
+        FfiConverterULong.lower(`nonce`),
+        FfiConverterULong.lower(`chainId`),_status)
 }
     )
     }

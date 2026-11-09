@@ -411,6 +411,7 @@ pub fn registered_chain_ids() -> &'static [u64] {
         chain_id::TESTNET,
         chain_id::DEVNET,
         chain_id::TESTNET_V2,
+        chain_id::HYBRID_TESTNET,
         chain_id::LOCAL,
     ]
 }

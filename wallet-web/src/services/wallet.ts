@@ -316,22 +316,67 @@ export async function signReviewed(preview: TxPreview): Promise<{ raw: string; h
   const from = activeAccount();
   if (!from) throw new Error("wallet is locked");
   if (isDesktopShell()) {
-    if (preview.kind !== "transfer") throw new Error("The desktop signer currently signs transfers. Contract calls stay in the preview signer.");
-    const raw = await tauriInvoke<string>("wallet_sign_transfer_hd", {
-      bip39Passphrase: bip39Memory,
-      accountIndex: from.account,
-      toAddress: preview.counterparty,
-      amount: preview.amountAtoms,
+    if (preview.kind === "transfer") {
+      const raw = await tauriInvoke<string>("wallet_sign_transfer_hd", {
+        bip39Passphrase: bip39Memory,
+        accountIndex: from.account,
+        toAddress: preview.counterparty,
+        amount: preview.amountAtoms,
+        fee: preview.feeAtoms,
+        nonce: Number(preview.nonce),
+        chainId: preview.chainId,
+      });
+      const hash = signingHash(
+        {
+          sender: decodeAddress(preview.sender),
+          nonce: BigInt(preview.nonce),
+          fee: BigInt(preview.feeAtoms),
+          kind: { type: "transfer", to: decodeRecipient(preview.counterparty, preview.chainId), amount: BigInt(preview.amountAtoms) },
+        },
+        preview.chainId,
+      );
+      return { raw: raw.replace(/^0x/, ""), hash: bytesToHex(hash) };
+    }
+    const callPayload = {
+      contractAddress: preview.counterparty,
+      contract: preview.counterparty,
+      counterparty: preview.counterparty,
+      method: preview.method,
+      argsHex: preview.argsHex,
+      value: preview.valueAtoms,
+      valueAtoms: preview.valueAtoms,
+      gasLimit: preview.gasLimit,
       fee: preview.feeAtoms,
+      feeAtoms: preview.feeAtoms,
       nonce: Number(preview.nonce),
       chainId: preview.chainId,
-    });
+    };
+    const raw =
+      from.kind === "legacy"
+        ? await tauriInvoke<string>("wallet_sign_call", callPayload)
+        : await tauriInvoke<string>("wallet_sign_call_hd", {
+            ...callPayload,
+            bip39Passphrase: bip39Memory,
+            accountIndex: from.account,
+          });
+    const argsBytes = preview.argsHex
+      ? new Uint8Array(
+          preview.argsHex.match(/.{1,2}/g)?.map((b) => Number.parseInt(b, 16)) ?? [],
+        )
+      : new Uint8Array();
     const hash = signingHash(
       {
         sender: decodeAddress(preview.sender),
         nonce: BigInt(preview.nonce),
         fee: BigInt(preview.feeAtoms),
-        kind: { type: "transfer", to: decodeRecipient(preview.counterparty, preview.chainId), amount: BigInt(preview.amountAtoms) },
+        kind: {
+          type: "call",
+          contract: decodeRecipient(preview.counterparty, preview.chainId),
+          value: BigInt(preview.valueAtoms),
+          method: preview.method,
+          args: argsBytes,
+          gasLimit: BigInt(preview.gasLimit),
+        },
       },
       preview.chainId,
     );
@@ -341,6 +386,13 @@ export async function signReviewed(preview: TxPreview): Promise<{ raw: string; h
 }
 
 export async function revealWithPassword(password: string): Promise<string> {
+  if (isDesktopShell()) {
+    const res = await tauriInvoke<{ mnemonic?: string; phrase?: string } | string>("wallet_reveal", {
+      passphrase: password,
+    });
+    if (typeof res === "string") return res;
+    return res.mnemonic ?? res.phrase ?? "";
+  }
   const file = loadVault();
   if (!file) throw new Error("no wallet on this device");
   const opened = await openVault(file, password);

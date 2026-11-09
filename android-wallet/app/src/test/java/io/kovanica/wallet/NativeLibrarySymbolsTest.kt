@@ -38,6 +38,7 @@ class NativeLibrarySymbolsTest {
             "uniffi_kovanica_light_ffi_fn_func_import_hd_wallet",
             "uniffi_kovanica_light_ffi_fn_func_derive_account",
             "uniffi_kovanica_light_ffi_fn_func_sign_transfer_hd",
+            "uniffi_kovanica_light_ffi_fn_func_sign_call_hd",
             "uniffi_kovanica_light_ffi_fn_func_lock",
         )
         for (sym in hdSymbols) {
