@@ -193,10 +193,11 @@ async function tryMethod(rpcUrl: string, method: string, params: unknown[]): Pro
   return last;
 }
 
-export async function readNodeWatch(rpcUrl: string): Promise<{ dag: string; template: string }> {
-  const [dag, template] = await Promise.all([
+export async function readNodeWatch(rpcUrl: string): Promise<{ dag: string; template: string; header: string }> {
+  const [dag, template, header] = await Promise.all([
     tryMethod(rpcUrl, "kovanica_getDagInfo", []),
     tryMethod(rpcUrl, "kovanica_getBlockTemplate", []),
+    tryMethod(rpcUrl, "kovanica_getLeaderHeader", []),
   ]);
-  return { dag, template };
+  return { dag, template, header };
 }

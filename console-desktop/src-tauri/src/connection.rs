@@ -10,7 +10,7 @@
 use std::fs;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use kovanica_types::epoch_for_round;
 use kovanica_types::signing::chain_id;
@@ -276,6 +276,9 @@ fn fetch_status_with_pins(
     let height = parse_qty(&height_value).map_err(|_| bad_payload(endpoint, "height"))?;
     let sync = rpc.call("kovanica_syncStatus", Value::Array(vec![]))?;
     let (peer_count, peers) = parse_peers(&sync).map_err(|_| bad_payload(endpoint, "peer list"))?;
+    if reported_chain_id(&sync) == Some(chain_id::HYBRID_TESTNET) {
+        return prove_hybrid_pow(rpc, endpoint, height, peer_count, peers);
+    }
     let header = rpc.call("kovanica_getLeaderHeader", Value::Array(vec![]))?;
     if header.is_null() {
         return Ok(NodeStatus {
@@ -399,6 +402,182 @@ fn fetch_status_with_pins(
         peer_count: peer_count.to_string(),
         peers,
     })
+}
+
+/// Chain 5 has no committee seals. Prove the tip with the PoW header verifier.
+fn prove_hybrid_pow(
+    rpc: &impl Rpc,
+    _endpoint: &str,
+    height: u64,
+    peer_count: u64,
+    peers: Vec<PeerStatus>,
+) -> Result<NodeStatus, ConnError> {
+    let dag = rpc
+        .call("kovanica_getDagInfo", Value::Array(vec![]))
+        .unwrap_or(Value::Null);
+    let mut header = find_pow_header(&dag);
+    if header.is_none() {
+        if let Some(round) = header_u64(&dag, &["tipRound", "tip_round", "round", "selectedRound"]) {
+            if let Ok(block) = rpc.call("kovanica_getBlockByRound", Value::Array(vec![Value::from(round)])) {
+                header = find_pow_header(&block);
+            }
+        }
+    }
+    if header.is_none() {
+        if let Ok(leader) = rpc.call("kovanica_getLeaderHeader", Value::Array(vec![])) {
+            header = find_pow_header(&leader);
+        }
+    }
+    let Some(header) = header else {
+        return Ok(pow_status(
+            height,
+            peer_count,
+            peers,
+            None,
+            "Chain 5 does not use committee seals. The node did not return a PoW header this console could verify.",
+        ));
+    };
+    let parent = parent_header_json(&header);
+    let now = unix_ms();
+    let header_json = header.to_string();
+    match kovanica_light_ffi::verify_pow_header_json(
+        chain_id::HYBRID_TESTNET,
+        header_json,
+        parent.clone(),
+        Some(now),
+    ) {
+        Ok(verified) => {
+            let cumulative = if parent.is_empty() {
+                verified.work.clone()
+            } else {
+                let chain = format!("[{parent},{header}]");
+                kovanica_light_ffi::verify_pow_header_chain_json(chain_id::HYBRID_TESTNET, chain, Some(now))
+                    .unwrap_or_else(|_| verified.work.clone())
+            };
+            let target = header_u64(&header, &["target_bits", "targetBits"])
+                .map(|bits| format!("{bits:#010x}"))
+                .unwrap_or_else(|| "unreported".to_string());
+            Ok(pow_status(
+                height,
+                peer_count,
+                peers,
+                Some(verified.round.to_string()),
+                &format!(
+                    "Verified Hybrid PoW header. Round {}. target_bits {}. Work {}. Cumulative work {}. powHash {}. GHOSTDAG K=5, target 4s. No committee seals on chain 5.",
+                    verified.round, target, verified.work, cumulative, verified.pow_hash
+                ),
+            ))
+        }
+        Err(err) => Ok(pow_status(
+            height,
+            peer_count,
+            peers,
+            header_u64(&header, &["round"]).map(|round| round.to_string()),
+            &format!("Chain 5 PoW header did not verify: {err}"),
+        )),
+    }
+}
+
+fn pow_status(
+    height: u64,
+    peer_count: u64,
+    peers: Vec<PeerStatus>,
+    leader_round: Option<String>,
+    chain_note: &str,
+) -> NodeStatus {
+    let proven = chain_note.starts_with("Verified Hybrid PoW");
+    NodeStatus {
+        chain_id: proven.then(|| chain_id::HYBRID_TESTNET.to_string()),
+        chain_note: chain_note.to_string(),
+        height: height.to_string(),
+        leader_round,
+        epoch: None,
+        peer_count: peer_count.to_string(),
+        peers,
+    }
+}
+
+fn reported_chain_id(sync: &Value) -> Option<u64> {
+    for key in ["chainId", "chain_id", "chainID"] {
+        let Some(value) = sync.get(key) else { continue };
+        if let Some(id) = value.as_u64() {
+            return Some(id);
+        }
+        if let Some(text) = value.as_str() {
+            if let Ok(id) = text.parse::<u64>() {
+                return Some(id);
+            }
+            if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+                if let Ok(id) = u64::from_str_radix(hex, 16) {
+                    return Some(id);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn looks_like_pow_header(value: &Value) -> bool {
+    let Some(obj) = value.as_object() else { return false };
+    obj.contains_key("round")
+        && (obj.contains_key("target_bits") || obj.contains_key("targetBits"))
+        && (obj.contains_key("chain_id") || obj.contains_key("chainId"))
+}
+
+fn find_pow_header(value: &Value) -> Option<Value> {
+    if looks_like_pow_header(value) {
+        return Some(normalize_pow_header(value));
+    }
+    match value {
+        Value::Object(map) => map.values().find_map(find_pow_header),
+        Value::Array(items) => items.iter().find_map(find_pow_header),
+        _ => None,
+    }
+}
+
+fn normalize_pow_header(value: &Value) -> Value {
+    let Some(obj) = value.as_object() else { return value.clone() };
+    let mut out = serde_json::Map::new();
+    for (key, child) in obj {
+        let name = match key.as_str() {
+            "chainId" => "chain_id",
+            "targetBits" => "target_bits",
+            "merkleRoot" => "merkle_root",
+            "powHash" => "pow_hash",
+            other => other,
+        };
+        out.insert(name.to_string(), child.clone());
+    }
+    Value::Object(out)
+}
+
+fn parent_header_json(header: &Value) -> String {
+    let Some(parents) = header.get("parents").and_then(Value::as_array) else {
+        return String::new();
+    };
+    parents.iter().find_map(find_pow_header).map(|parent| parent.to_string()).unwrap_or_default()
+}
+
+fn header_u64(value: &Value, keys: &[&str]) -> Option<u64> {
+    for key in keys {
+        let Some(child) = value.get(*key) else { continue };
+        if let Some(number) = child.as_u64() {
+            return Some(number);
+        }
+        if let Some(text) = child.as_str() {
+            if let Ok(number) = text.parse::<u64>() {
+                return Some(number);
+            }
+        }
+    }
+    None
+}
+
+fn unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
 }
 
 /// Registered chain ids from `kovanica-types`.
@@ -901,6 +1080,30 @@ mod tests {
     }
 
     #[test]
+    fn chain_five_skips_committee_seals_when_no_pow_header_is_present() {
+        struct Hybrid;
+        impl Rpc for Hybrid {
+            fn call(&self, method: &str, _params: Value) -> Result<Value, ConnError> {
+                match method {
+                    "kovanica_blockNumber" => Ok(json!("0x2a")),
+                    "kovanica_syncStatus" => Ok(json!({
+                        "chainId": 5,
+                        "peerCount": 1,
+                        "peers": [{"peerId": "12D3KooWexample", "reportedTipRound": 9}]
+                    })),
+                    "kovanica_getDagInfo" => Ok(json!({"chainId": 5, "tipRound": 9})),
+                    "kovanica_getBlockByRound" => Err(ConnError::Rejected("no block".to_string())),
+                    "kovanica_getLeaderHeader" => Ok(Value::Null),
+                    other => Err(ConnError::Rejected(format!("unexpected method {other}"))),
+                }
+            }
+        }
+        let status = fetch_status(&Hybrid, DEFAULT_RPC_URL).unwrap();
+        assert_eq!(status.chain_id, None);
+        assert!(status.chain_note.contains("Chain 5"));
+        assert!(!status.chain_note.contains("Commit seals"));
+    }
+
     fn seals_without_a_pinned_committee_are_not_proven() {
         assert!(
             pinned_committees().is_empty(),

@@ -26,7 +26,7 @@ export function Watchlist({ onSend, onContract }: { onSend: (address: string) =>
   const [reads, setReads] = useState<Record<string, { call: string; storage: string }>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [miner, setMiner] = useState(account?.address ?? "");
-  const [nodeRead, setNodeRead] = useState<{ dag: string; template: string } | null>(null);
+  const [nodeRead, setNodeRead] = useState<{ dag: string; template: string; header: string } | null>(null);
   const [nodeBusy, setNodeBusy] = useState(false);
 
   async function refresh(item: WatchItem) {
@@ -104,7 +104,7 @@ export function Watchlist({ onSend, onContract }: { onSend: (address: string) =>
       ))}
       <section className="rounded-card border border-line bg-ink p-4">
         <h3 className="text-lg text-paper">Miner / node</h3>
-        <p className="mt-2 text-sm text-muted">Chain 5 is the Hybrid PoW + GHOSTDAG network. This reads `kovanica_getDagInfo` and `kovanica_getBlockTemplate`. It does not invent a block reward if the node leaves that field out.</p>
+        <p className="mt-2 text-sm text-muted">Chain 5 is Hybrid PoW + GHOSTDAG. K is 5 and the target block time is 4 seconds. target_bits and work are shown only when the node includes them. This screen does not recompute KovanicaHash. The phone and the desktop console do.</p>
         <label className="mt-3 grid gap-1 text-sm text-muted">
           Watched miner
           <input className="min-h-11 rounded-2xl border border-line bg-surface px-4 font-mono text-sm text-paper" value={miner} onChange={(e) => setMiner(e.target.value)} spellCheck={false} autoCapitalize="none" />
@@ -127,7 +127,10 @@ export function Watchlist({ onSend, onContract }: { onSend: (address: string) =>
         </button>
         {nodeRead ? (
           <div className="mt-3 grid gap-3 text-sm">
-            <p className="text-muted">{miner && (nodeRead.dag.includes(miner) || nodeRead.template.includes(miner)) ? "The watched miner appears in this response." : "The watched miner does not appear in this response."}</p>
+            <p className="text-paper">GHOSTDAG K=5 · target 4 s · pruning 14,400 rounds · cache 64 MiB</p>
+            <p className="text-paper">target_bits {fieldIn(nodeRead, ["target_bits", "targetBits"]) ?? "not in this response"}</p>
+            <p className="text-paper">work {fieldIn(nodeRead, ["work", "blue_work", "blueWork"]) ?? "not in this response"}</p>
+            <p className="text-muted">{miner && (nodeRead.dag.includes(miner) || nodeRead.template.includes(miner) || nodeRead.header.includes(miner)) ? "The watched miner appears in this response." : "The watched miner does not appear in this response."}</p>
             <div>
               <p className="text-muted">DAG info</p>
               <pre className="mono mt-1 max-h-40 overflow-auto text-xs break-all whitespace-pre-wrap text-paper">{nodeRead.dag}</pre>
@@ -141,4 +144,41 @@ export function Watchlist({ onSend, onContract }: { onSend: (address: string) =>
       </section>
     </div>
   );
+}
+
+function fieldIn(read: { dag: string; template: string; header: string }, keys: string[]): string | null {
+  for (const text of [read.header, read.dag, read.template]) {
+    const found = findField(text, keys);
+    if (found) return found;
+  }
+  return null;
+}
+
+function findField(text: string, keys: string[]): string | null {
+  try {
+    return walk(JSON.parse(text), keys);
+  } catch {
+    return null;
+  }
+}
+
+function walk(value: unknown, keys: string[]): string | null {
+  if (!value || typeof value !== "object") return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = walk(item, keys);
+      if (found) return found;
+    }
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of keys) {
+    const child = record[key];
+    if (typeof child === "string" || typeof child === "number") return String(child);
+  }
+  for (const child of Object.values(record)) {
+    const found = walk(child, keys);
+    if (found) return found;
+  }
+  return null;
 }
