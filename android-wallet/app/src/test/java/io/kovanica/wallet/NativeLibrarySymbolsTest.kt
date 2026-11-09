@@ -40,6 +40,9 @@ class NativeLibrarySymbolsTest {
             "uniffi_kovanica_light_ffi_fn_func_sign_transfer_hd",
             "uniffi_kovanica_light_ffi_fn_func_sign_call_hd",
             "uniffi_kovanica_light_ffi_fn_func_lock",
+            "uniffi_kovanica_light_ffi_fn_func_verify_pow_header_json",
+            "uniffi_kovanica_light_ffi_fn_func_verify_pow_header_chain_json",
+            "uniffi_kovanica_light_ffi_fn_func_default_mobile_node_config",
         )
         for (sym in hdSymbols) {
             assertTrue("missing HD UniFFI binding symbol $sym", needed.contains(sym))

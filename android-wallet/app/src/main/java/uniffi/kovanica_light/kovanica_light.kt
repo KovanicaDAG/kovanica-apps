@@ -688,6 +688,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_create_wallet(
     ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_default_mobile_node_config(
+    ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_derive_account(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_derive_comms_id(
@@ -726,6 +728,10 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_verify_header(
     ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_verify_pow_header_chain_json(
+    ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_verify_pow_header_json(
+    ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_wallet_address(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_wallet_pubkey_hex(
@@ -758,6 +764,8 @@ internal object UniffiLib {
     external fun uniffi_kovanica_light_ffi_fn_func_create_hd_wallet(`wordCount`: Int,`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_create_wallet(`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_default_mobile_node_config(`chainId`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_derive_account(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`bip39Passphrase`: RustBuffer.ByValue,`accountIndex`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -796,6 +804,10 @@ internal object UniffiLib {
     external fun uniffi_kovanica_light_ffi_fn_func_sign_witness_raw(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`chainId`: Long,`epoch`: Long,`beaconHex`: RustBuffer.ByValue,`nonce`: Long,`feeRate`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_verify_header(`chainId`: Long,`epoch`: Long,`committeeJson`: RustBuffer.ByValue,`headerJson`: RustBuffer.ByValue,`sealsJson`: RustBuffer.ByValue,`parentJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_verify_pow_header_chain_json(`expectedChainId`: Long,`headersJson`: RustBuffer.ByValue,`nowMs`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_verify_pow_header_json(`expectedChainId`: Long,`headerJson`: RustBuffer.ByValue,`parentJson`: RustBuffer.ByValue,`nowMs`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_wallet_address(`keystoreJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -944,6 +956,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_kovanica_light_ffi_checksum_func_create_wallet() != 1575) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_default_mobile_node_config() != 8046) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_derive_account() != 391) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -999,6 +1014,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_verify_header() != 48525) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_verify_pow_header_chain_json() != 13997) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_verify_pow_header_json() != 63354) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_wallet_address() != 54899) {
@@ -1099,6 +1120,33 @@ object UniffiWithHandle
  * @suppress
  * */
 object NoHandle
+
+/**
+ * @suppress
+ */
+public object FfiConverterUShort: FfiConverter<UShort, Short> {
+    override fun lift(value: Short): UShort {
+        return value.toUShort()
+    }
+
+    fun lift(value: Int): UShort {
+        return value.toUShort()
+    }
+
+    override fun read(buf: ByteBuffer): UShort {
+        return lift(buf.getShort())
+    }
+
+    override fun lower(value: UShort): Short {
+        return value.toShort()
+    }
+
+    override fun allocationSize(value: UShort) = 2UL
+
+    override fun write(value: UShort, buf: ByteBuffer) {
+        buf.putShort(value.toShort())
+    }
+}
 
 /**
  * @suppress
@@ -1386,6 +1434,101 @@ public object FfiConverterTypeImportedWallet: FfiConverterRustBuffer<ImportedWal
 
 
 /**
+ * Canonical resource and pruning configuration for an embedded mobile pruned full-node.
+ */
+data class MobileNodeProfile (
+    /**
+     * Network chain ID (`5` for `HYBRID_TESTNET`, `1` for `MAINNET`).
+     */
+    var `chainId`: kotlin.ULong
+    , 
+    /**
+     * GHOSTDAG parameter K (`5`).
+     */
+    var `ghostdagK`: kotlin.UInt
+    , 
+    /**
+     * Target block interval in milliseconds (`4000`).
+     */
+    var `targetBlockMs`: kotlin.ULong
+    , 
+    /**
+     * Rolling DAG block retention window in rounds (`14_400`).
+     */
+    var `pruningWindowRounds`: kotlin.ULong
+    , 
+    /**
+     * Maximum `redb` / LRU page cache budget in MiB (`64`).
+     */
+    var `maxRedbCacheMb`: kotlin.UInt
+    , 
+    /**
+     * Maximum concurrent libp2p peers (`12`).
+     */
+    var `maxPeers`: kotlin.UShort
+    , 
+    /**
+     * Run background P2P sync only when on unmetered Wi-Fi and charging.
+     */
+    var `wifiAndChargingOnly`: kotlin.Boolean
+    , 
+    /**
+     * Loopback JSON-RPC bind address (`"127.0.0.1:8545"`).
+     */
+    var `localRpcBind`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeMobileNodeProfile: FfiConverterRustBuffer<MobileNodeProfile> {
+    override fun read(buf: ByteBuffer): MobileNodeProfile {
+        return MobileNodeProfile(
+            FfiConverterULong.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUShort.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: MobileNodeProfile) = (
+            FfiConverterULong.allocationSize(value.`chainId`) +
+            FfiConverterUInt.allocationSize(value.`ghostdagK`) +
+            FfiConverterULong.allocationSize(value.`targetBlockMs`) +
+            FfiConverterULong.allocationSize(value.`pruningWindowRounds`) +
+            FfiConverterUInt.allocationSize(value.`maxRedbCacheMb`) +
+            FfiConverterUShort.allocationSize(value.`maxPeers`) +
+            FfiConverterBoolean.allocationSize(value.`wifiAndChargingOnly`) +
+            FfiConverterString.allocationSize(value.`localRpcBind`)
+    )
+
+    override fun write(value: MobileNodeProfile, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`chainId`, buf)
+            FfiConverterUInt.write(value.`ghostdagK`, buf)
+            FfiConverterULong.write(value.`targetBlockMs`, buf)
+            FfiConverterULong.write(value.`pruningWindowRounds`, buf)
+            FfiConverterUInt.write(value.`maxRedbCacheMb`, buf)
+            FfiConverterUShort.write(value.`maxPeers`, buf)
+            FfiConverterBoolean.write(value.`wifiAndChargingOnly`, buf)
+            FfiConverterString.write(value.`localRpcBind`, buf)
+    }
+}
+
+
+
+/**
  * A sealed header this client accepted.
  */
 data class VerifiedHeader (
@@ -1456,6 +1599,77 @@ public object FfiConverterTypeVerifiedHeader: FfiConverterRustBuffer<VerifiedHea
 
 
 
+/**
+ * Verified Hybrid PoW + GHOSTDAG header metadata returned to mobile clients.
+ */
+data class VerifiedPowHeader (
+    /**
+     * Network chain ID.
+     */
+    var `chainId`: kotlin.ULong
+    , 
+    /**
+     * DAG round / height.
+     */
+    var `round`: kotlin.ULong
+    , 
+    /**
+     * Preimage digest (`0x` hex).
+     */
+    var `preimageDigest`: kotlin.String
+    , 
+    /**
+     * Verified KovanicaHash PoW digest (`0x` hex).
+     */
+    var `powHash`: kotlin.String
+    , 
+    /**
+     * Scalar PoW work (`u128` formatted as decimal string).
+     */
+    var `work`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeVerifiedPowHeader: FfiConverterRustBuffer<VerifiedPowHeader> {
+    override fun read(buf: ByteBuffer): VerifiedPowHeader {
+        return VerifiedPowHeader(
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: VerifiedPowHeader) = (
+            FfiConverterULong.allocationSize(value.`chainId`) +
+            FfiConverterULong.allocationSize(value.`round`) +
+            FfiConverterString.allocationSize(value.`preimageDigest`) +
+            FfiConverterString.allocationSize(value.`powHash`) +
+            FfiConverterString.allocationSize(value.`work`)
+    )
+
+    override fun write(value: VerifiedPowHeader, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`chainId`, buf)
+            FfiConverterULong.write(value.`round`, buf)
+            FfiConverterString.write(value.`preimageDigest`, buf)
+            FfiConverterString.write(value.`powHash`, buf)
+            FfiConverterString.write(value.`work`, buf)
+    }
+}
+
+
+
 
 
 /**
@@ -1520,6 +1734,38 @@ public object FfiConverterTypeLightFfiError : FfiConverterRustBuffer<LightFfiExc
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
     }
 
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalULong: FfiConverterRustBuffer<kotlin.ULong?> {
+    override fun read(buf: ByteBuffer): kotlin.ULong? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterULong.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.ULong?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterULong.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.ULong?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterULong.write(value, buf)
+        }
+    }
 }
 
 
@@ -1712,6 +1958,20 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
     
         
         FfiConverterString.lower(`passphrase`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Return the canonical pruned full-node configuration profile for `chain_id` on mobile.
+         */ fun `defaultMobileNodeConfig`(`chainId`: kotlin.ULong): MobileNodeProfile {
+            return FfiConverterTypeMobileNodeProfile.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_default_mobile_node_config(
+    
+        
+        FfiConverterULong.lower(`chainId`),_status)
 }
     )
     }
@@ -2099,6 +2359,42 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         FfiConverterString.lower(`headerJson`),
         FfiConverterString.lower(`sealsJson`),
         FfiConverterString.lower(`parentJson`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Verify an ordered JSON array of Hybrid PoW + GHOSTDAG selected-parent headers
+         * and return cumulative PoW work as a decimal string (`u128`).
+         */
+    @Throws(LightFfiException::class) fun `verifyPowHeaderChainJson`(`expectedChainId`: kotlin.ULong, `headersJson`: kotlin.String, `nowMs`: kotlin.ULong?): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_verify_pow_header_chain_json(
+    
+        
+        FfiConverterULong.lower(`expectedChainId`),
+        FfiConverterString.lower(`headersJson`),
+        FfiConverterOptionalULong.lower(`nowMs`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Verify one Hybrid PoW + GHOSTDAG `BlockHeader` JSON (KovanicaHash + target + optional parent).
+         */
+    @Throws(LightFfiException::class) fun `verifyPowHeaderJson`(`expectedChainId`: kotlin.ULong, `headerJson`: kotlin.String, `parentJson`: kotlin.String, `nowMs`: kotlin.ULong?): VerifiedPowHeader {
+            return FfiConverterTypeVerifiedPowHeader.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_verify_pow_header_json(
+    
+        
+        FfiConverterULong.lower(`expectedChainId`),
+        FfiConverterString.lower(`headerJson`),
+        FfiConverterString.lower(`parentJson`),
+        FfiConverterOptionalULong.lower(`nowMs`),_status)
 }
     )
     }
