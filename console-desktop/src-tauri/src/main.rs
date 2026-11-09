@@ -168,6 +168,95 @@ fn wallet_import(
     })
 }
 
+/// Create an HD wallet with 12 or 24 words. The phrase is returned once.
+#[tauri::command]
+fn wallet_create_hd(
+    app: tauri::AppHandle,
+    state: State<'_, WalletApp>,
+    word_count: u32,
+    passphrase: String,
+) -> Result<wallet::NewWallet, String> {
+    let path = wallet_file(&app)?;
+    let passphrase = Zeroizing::new(passphrase);
+    with_wallet(&state, |store| {
+        store.create_hd(&path, word_count, passphrase.as_str(), Instant::now())
+    })
+}
+
+/// Import a 12- or 24-word BIP-39 mnemonic into an HD wallet.
+#[tauri::command]
+fn wallet_import_hd(
+    app: tauri::AppHandle,
+    state: State<'_, WalletApp>,
+    mnemonic: String,
+    passphrase: String,
+) -> Result<wallet::WalletStatus, String> {
+    let path = wallet_file(&app)?;
+    let mnemonic = Zeroizing::new(mnemonic);
+    let passphrase = Zeroizing::new(passphrase);
+    with_wallet(&state, |store| {
+        store.import_hd(
+            &path,
+            mnemonic.as_str(),
+            passphrase.as_str(),
+            Instant::now(),
+        )
+    })
+}
+
+/// Derive an account address at m/44'/3007'/<account_index>'/0'/0' from the unlocked HD session.
+#[tauri::command]
+fn wallet_derive_account(
+    app: tauri::AppHandle,
+    state: State<'_, WalletApp>,
+    bip39_passphrase: String,
+    account_index: u32,
+) -> Result<String, String> {
+    let path = wallet_file(&app)?;
+    let bip39_passphrase = Zeroizing::new(bip39_passphrase);
+    with_wallet(&state, |store| {
+        store.derive_account(
+            &path,
+            bip39_passphrase.as_str(),
+            account_index,
+            Instant::now(),
+        )
+    })
+}
+
+/// Sign a reviewed HD transfer from the unlocked session.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn wallet_sign_transfer_hd(
+    app: tauri::AppHandle,
+    state: State<'_, WalletApp>,
+    bip39_passphrase: String,
+    account_index: u32,
+    to_address: String,
+    amount: String,
+    fee: String,
+    nonce: u64,
+    chain_id: u64,
+) -> Result<String, String> {
+    let path = wallet_file(&app)?;
+    let bip39_passphrase = Zeroizing::new(bip39_passphrase);
+    let amount_atoms = parse_atom_string(&amount)?;
+    let fee_atoms = parse_atom_string(&fee)?;
+    with_wallet(&state, |store| {
+        store.sign_transfer_hd(
+            &path,
+            bip39_passphrase.as_str(),
+            account_index,
+            &to_address,
+            amount_atoms,
+            fee_atoms,
+            nonce,
+            chain_id,
+            Instant::now(),
+        )
+    })
+}
+
 /// Open an existing wallet. A wrong password does not reveal the phrase.
 #[tauri::command]
 fn wallet_unlock(
@@ -405,6 +494,10 @@ fn main() {
             wallet_status,
             wallet_create,
             wallet_import,
+            wallet_create_hd,
+            wallet_import_hd,
+            wallet_derive_account,
+            wallet_sign_transfer_hd,
             wallet_unlock,
             wallet_reveal,
             wallet_lock,

@@ -402,6 +402,142 @@ impl WalletStore {
         })
     }
 
+    /// Create an HD wallet with 12 or 24 words (SLIP-0010 m/44'/3007'/0'/0'/0').
+    pub fn create_hd(
+        &mut self,
+        path: &Path,
+        word_count: u32,
+        passphrase: &str,
+        now: Instant,
+    ) -> Result<NewWallet, String> {
+        if passphrase.is_empty() {
+            return Err("Enter a password.".to_string());
+        }
+        refuse_existing(path)?;
+        let mut created = kovanica_light_ffi::create_hd_wallet(word_count, passphrase.to_string())
+            .map_err(|err| map_ffi_error(&err))?;
+        let saved = (|| {
+            let address = accept_keystore_json(&created.keystore_json)?;
+            if address != created.address {
+                return Err("The wallet could not be opened.".to_string());
+            }
+            write_new_keystore(path, created.keystore_json.as_bytes())?;
+            Ok(address)
+        })();
+        let address = match saved {
+            Ok(address) => address,
+            Err(err) => {
+                created.mnemonic.zeroize();
+                created.keystore_json.zeroize();
+                return Err(err);
+            }
+        };
+        self.open = Some(OpenWallet {
+            passphrase: Zeroizing::new(passphrase.to_string()),
+            address: address.clone(),
+            last_active: now,
+            quote: None,
+        });
+        let mnemonic = Zeroizing::new(std::mem::take(&mut created.mnemonic));
+        created.keystore_json.zeroize();
+        Ok(NewWallet { address, mnemonic })
+    }
+
+    /// Import a 12- or 24-word BIP-39 mnemonic into an HD wallet (SLIP-0010 m/44'/3007'/0'/0'/0').
+    pub fn import_hd(
+        &mut self,
+        path: &Path,
+        mnemonic: &str,
+        passphrase: &str,
+        now: Instant,
+    ) -> Result<WalletStatus, String> {
+        if passphrase.is_empty() {
+            return Err("Enter a password.".to_string());
+        }
+        if mnemonic.trim().is_empty() {
+            return Err("Enter a 12- or 24-word BIP-39 recovery phrase.".to_string());
+        }
+        refuse_existing(path)?;
+        let mut imported =
+            kovanica_light_ffi::import_hd_wallet(mnemonic.to_string(), passphrase.to_string())
+                .map_err(|err| map_ffi_error(&err))?;
+        let saved = (|| {
+            let address = accept_keystore_json(&imported.keystore_json)?;
+            if address != imported.address {
+                return Err("The wallet could not be opened.".to_string());
+            }
+            write_new_keystore(path, imported.keystore_json.as_bytes())?;
+            Ok(address)
+        })();
+        let address = match saved {
+            Ok(address) => address,
+            Err(err) => {
+                imported.keystore_json.zeroize();
+                return Err(err);
+            }
+        };
+        self.open = Some(OpenWallet {
+            passphrase: Zeroizing::new(passphrase.to_string()),
+            address: address.clone(),
+            last_active: now,
+            quote: None,
+        });
+        imported.keystore_json.zeroize();
+        Ok(WalletStatus {
+            phase: PHASE_OPEN.to_string(),
+            address: Some(address),
+        })
+    }
+
+    /// Derive an HD account address at m/44'/3007'/<account_index>'/0'/0' from the unlocked session.
+    pub fn derive_account(
+        &mut self,
+        path: &Path,
+        bip39_passphrase: &str,
+        account_index: u32,
+        now: Instant,
+    ) -> Result<String, String> {
+        let pass = self.session(now)?.passphrase.clone();
+        let json = read_keystore(path)?;
+        kovanica_light_ffi::derive_account(
+            json,
+            pass.as_str().to_string(),
+            bip39_passphrase.to_string(),
+            account_index,
+        )
+        .map_err(|err| map_ffi_error(&err))
+    }
+
+    /// Sign a reviewed HD transfer from the unlocked session.
+    #[allow(clippy::too_many_arguments)]
+    pub fn sign_transfer_hd(
+        &mut self,
+        path: &Path,
+        bip39_passphrase: &str,
+        account_index: u32,
+        to_address: &str,
+        amount: u64,
+        fee: u64,
+        nonce: u64,
+        chain_id: u64,
+        now: Instant,
+    ) -> Result<String, String> {
+        let pass = self.session(now)?.passphrase.clone();
+        let json = read_keystore(path)?;
+        kovanica_light_ffi::sign_transfer_hd(
+            json,
+            pass.as_str().to_string(),
+            bip39_passphrase.to_string(),
+            account_index,
+            to_address.to_string(),
+            amount,
+            fee,
+            nonce,
+            chain_id,
+        )
+        .map_err(|err| map_ffi_error(&err))
+    }
+
     /// Check the password, then keep the session open. The phrase is wiped.
     ///
     /// A wrong password is counted with [`reveal`]. Guessing here does not

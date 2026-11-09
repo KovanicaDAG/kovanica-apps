@@ -23,10 +23,11 @@ thiserror = "1"
 zeroize = { version = "1", features = ["serde"] }
 bincode = "1.3"
 hex = "0.4"
-kovanica-keystore = { path = "../../../crates/kovanica-keystore" }
-kovanica-light-ffi = { path = "../../../crates/kovanica-light-ffi" }
-kovanica-types = { path = "../../../crates/kovanica-types" }
+kovanica-keystore = { path = "../../../kovanica/crates/kovanica-keystore" }
+kovanica-light-ffi = { path = "../../../kovanica/crates/kovanica-light-ffi" }
+kovanica-types = { path = "../../../kovanica/crates/kovanica-types" }
+kovanica-wallet-core = { path = "../../../kovanica/crates/kovanica-wallet-core" }
 
 [dev-dependencies]
-kovanica-crypto = { path = "../../../crates/kovanica-crypto" }
+kovanica-crypto = { path = "../../../kovanica/crates/kovanica-crypto" }
 tauri = { version = "2", features = ["test"] }
