@@ -38,7 +38,7 @@ class KovanicaNodeService : Service() {
             stopPolling()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
-            NodeRuntime.publish(NodeRuntime.snapshot.copy(phase = PHASE_STOPPED, note = "Stopped."))
+            NodeRuntime.publish(NodeRuntime.snapshot.copy(phase = NodeRuntime.PHASE_STOPPED, note = "Stopped."))
             return START_NOT_STICKY
         }
         chainId = intent?.getLongExtra(EXTRA_CHAIN_ID, HYBRID_CHAIN.toLong())?.toULong() ?: HYBRID_CHAIN
@@ -94,11 +94,11 @@ class KovanicaNodeService : Service() {
     private fun tick() {
         val profile = runCatching { defaultMobileNodeConfig(chainId) }.getOrNull()
         if (profile == null) {
-            NodeRuntime.publish(NodeRuntime.snapshot.copy(phase = PHASE_STOPPED, note = "The mobile node profile did not load."))
+            NodeRuntime.publish(NodeRuntime.snapshot.copy(phase = NodeRuntime.PHASE_STOPPED, note = "The mobile node profile did not load."))
             return
         }
         val base = NodeRuntime.Snapshot(
-            phase = PHASE_RUNNING,
+            phase = NodeRuntime.PHASE_RUNNING,
             round = "—",
             powHash = "—",
             work = "—",
@@ -112,7 +112,7 @@ class KovanicaNodeService : Service() {
             targetMs = profile.targetBlockMs.toString(),
         )
         if (!allowsSync(profile.wifiAndChargingOnly)) {
-            NodeRuntime.publish(base.copy(phase = PHASE_PAUSED, note = "Paused until the phone is on unmetered Wi-Fi and charging."))
+            NodeRuntime.publish(base.copy(phase = NodeRuntime.PHASE_PAUSED, note = "Paused until the phone is on unmetered Wi-Fi and charging."))
             schedule()
             return
         }

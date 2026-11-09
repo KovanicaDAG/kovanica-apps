@@ -1104,6 +1104,7 @@ mod tests {
         assert!(!status.chain_note.contains("Commit seals"));
     }
 
+    #[test]
     fn seals_without_a_pinned_committee_are_not_proven() {
         assert!(
             pinned_committees().is_empty(),
