@@ -4,7 +4,7 @@ import type { TxPreview } from "@/core/session";
 import { AddressBook } from "@/components/contacts/AddressBook";
 import { PRESETS, chainName, presetById } from "@/lib/networks";
 import { broadcast, indexerLogs, probeNode, readAccount, receipt } from "@/services/rpc";
-import { onWalletLock } from "@/services/tauri";
+import { onWalletLock, touchSession } from "@/services/tauri";
 import { addAccount, clearBackup, forgetDevice, isDesktopShell, loadVault, lock, lockUi, refreshDesktopSession, selectAccount, signReviewed, subscribeBackup } from "@/services/wallet";
 import { useActivity } from "@/stores/activity";
 import { signingLock, useNetwork } from "@/stores/network";
@@ -15,9 +15,14 @@ import { Contracts } from "@/components/contracts/Contracts";
 import { Onboarding } from "@/components/onboarding/Onboarding";
 import { Receive } from "@/components/receive/Receive";
 import { SendForm } from "@/components/send/SendForm";
+import { SettingsDrawer } from "@/components/settings/SettingsDrawer";
+import { Watchlist } from "@/components/watch/Watchlist";
+import { useSettings } from "@/stores/settings";
+import type { WatchKind } from "@/stores/watch";
+
 import { toast } from "sonner";
 
-type Tab = "home" | "send" | "receive" | "activity" | "contracts";
+type Tab = "home" | "send" | "receive" | "activity" | "contracts" | "watch";
 
 export function WalletApp() {
   const [ready, setReady] = useState(true);
@@ -25,6 +30,10 @@ export function WalletApp() {
   const [preview, setPreview] = useState<TxPreview | null>(null);
   const [signing, setSigning] = useState(false);
   const [backup, setBackup] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [sendTo, setSendTo] = useState("");
+  const [contractPrefill, setContractPrefill] = useState<{ address: string; kind: WatchKind } | null>(null);
+  const lockMinutes = useSettings((s) => s.lockMinutes);
   const session = useSession();
   const net = useNetwork();
   const lockState = signingLock(net);
@@ -38,6 +47,17 @@ export function WalletApp() {
       void onWalletLock(() => lockUi()).then((stop) => {
         stopLock = stop;
       });
+      const touch = () => {
+        void touchSession().catch(() => undefined);
+      };
+      window.addEventListener("pointerdown", touch);
+      useActivity.getState().hydrate();
+      setReady(true);
+      return () => {
+        stopBackup();
+        stopLock();
+        window.removeEventListener("pointerdown", touch);
+      };
     } else {
       useSession.getState().hydrate(loadVault());
     }
@@ -76,9 +96,9 @@ export function WalletApp() {
 
   useEffect(() => {
     if (session.status !== "unlocked") return;
-    const timer = window.setTimeout(() => lock(), 5 * 60 * 1000);
+    const timer = window.setTimeout(() => void lock(), lockMinutes * 60 * 1000);
     return () => window.clearTimeout(timer);
-  }, [session.status, tab]);
+  }, [session.status, tab, lockMinutes]);
 
   useEffect(() => {
     if (!ready || !net.online) return;
@@ -104,28 +124,45 @@ export function WalletApp() {
       .catch(() => useActivity.getState().setIndexerNote("Outgoing transactions only. The indexer did not respond."));
   }, [net.indexerUrl]);
 
+  async function publish(raw: string, hash: string) {
+    if (!preview) return;
+    const preset = presetById(net.presetId);
+    const broadcastHash = await broadcast(preset.rpcUrl, raw);
+    useActivity.getState().push({
+      hash: broadcastHash || hash,
+      status: "pending",
+      direction: preview.kind === "transfer" ? "sent" : "contract",
+      amountAtoms: preview.kind === "transfer" ? preview.amountAtoms : preview.valueAtoms,
+      feeAtoms: preview.feeAtoms,
+      counterparty: preview.counterparty,
+      chainId: preview.chainId,
+      createdAt: Date.now(),
+      height: null,
+      note: preview.method,
+    });
+    setPreview(null);
+    setTab("activity");
+    toast("Transaction broadcast");
+  }
+
   async function confirm() {
     if (!preview || lockState.locked) return;
     setSigning(true);
     try {
       const signed = await signReviewed(preview);
-      const preset = presetById(net.presetId);
-      const hash = await broadcast(preset.rpcUrl, signed.raw);
-      useActivity.getState().push({
-        hash: hash || signed.hash,
-        status: "pending",
-        direction: preview.kind === "transfer" ? "sent" : "contract",
-        amountAtoms: preview.kind === "transfer" ? preview.amountAtoms : preview.valueAtoms,
-        feeAtoms: preview.feeAtoms,
-        counterparty: preview.counterparty,
-        chainId: preview.chainId,
-        createdAt: Date.now(),
-        height: null,
-        note: preview.method,
-      });
-      setPreview(null);
-      setTab("activity");
-      toast("Transaction broadcast");
+      await publish(signed.raw, signed.hash);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Broadcast failed");
+    } finally {
+      setSigning(false);
+    }
+  }
+
+  async function importSigned(signed: { raw: string; hash: string }) {
+    if (!preview || lockState.locked) return;
+    setSigning(true);
+    try {
+      await publish(signed.raw, signed.hash);
     } catch (error) {
       toast(error instanceof Error ? error.message : "Broadcast failed");
     } finally {
@@ -170,12 +207,15 @@ export function WalletApp() {
             ))}
           </div>
           <nav className="mt-6 grid grid-cols-3 gap-2 md:grid-cols-1">
-            {(["home", "send", "receive", "activity", "contracts"] as const).map((item) => (
+            {(["home", "send", "receive", "activity", "contracts", "watch"] as const).map((item) => (
               <button key={item} type="button" className={`min-h-11 rounded-full px-3 text-left capitalize ${tab === item ? "bg-surface text-paper" : "text-muted"}`} onClick={() => setTab(item)}>
                 {item}
               </button>
             ))}
           </nav>
+          <button type="button" className="mt-4 min-h-11 rounded-full border border-line px-4 text-sm text-paper" onClick={() => setSettingsOpen(true)}>
+            Settings
+          </button>
         </aside>
         <section className="px-5 py-6">
           <div className="mb-5 flex gap-2 overflow-x-auto">
@@ -214,13 +254,20 @@ export function WalletApp() {
               <p className="text-xs text-muted">Chain {net.probedChainId ?? "—"} · expected {presetById(net.presetId).expectedChainId ?? "reported"} · {chainName(net.probedChainId)}</p>
             </div>
           ) : null}
-          {tab === "send" ? <SendForm onReview={setPreview} /> : null}
+          {tab === "send" ? <SendForm onReview={setPreview} prefillTo={sendTo} /> : null}
           {tab === "receive" && account ? <Receive address={account.address} pathLabel={account.pathLabel} /> : null}
           {tab === "activity" ? <ActivityList /> : null}
-          {tab === "contracts" ? <Contracts onReview={setPreview} /> : null}
+          {tab === "contracts" ? <Contracts onReview={setPreview} prefill={contractPrefill} /> : null}
+          {tab === "watch" ? (
+            <Watchlist
+              onSend={(address) => { setSendTo(address); setTab("send"); }}
+              onContract={(item) => { setContractPrefill({ address: item.address, kind: item.kind }); setTab("contracts"); }}
+            />
+          ) : null}
         </section>
       </div>
-      {preview ? <ConfirmTx preview={preview} busy={signing} onCancel={() => setPreview(null)} onConfirm={() => void confirm()} /> : null}
+      {preview ? <ConfirmTx preview={preview} busy={signing} onCancel={() => setPreview(null)} onConfirm={() => void confirm()} onImport={(signed) => void importSigned(signed)} /> : null}
+      {settingsOpen ? <SettingsDrawer onClose={() => setSettingsOpen(false)} /> : null}
       {backup ? (
         <div className="fixed inset-0 z-40 grid place-items-center bg-ink/90 p-5">
           <div className="w-full max-w-lg rounded-card border border-line bg-surface p-5">

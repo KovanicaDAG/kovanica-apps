@@ -1,5 +1,6 @@
 package io.kovanica.wallet
 
+import android.Manifest
 import android.app.Activity
 import android.app.ActivityManager
 import android.app.AlertDialog
@@ -12,6 +13,7 @@ import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
+import android.os.Build
 import android.os.Bundle
 import android.text.Editable
 import android.text.InputType
@@ -69,6 +71,9 @@ class MainActivity : Activity() {
     private lateinit var networkChip: TextView
     private lateinit var chainState: TextView
     private lateinit var chainMeta: TextView
+    private lateinit var nodePhase: TextView
+    private lateinit var nodeMeta: TextView
+    private var stopNodeListen: () -> Unit = {}
     private lateinit var rpcField: EditText
     private lateinit var chainField: EditText
     private lateinit var epochField: EditText
@@ -311,7 +316,7 @@ class MainActivity : Activity() {
         val tokensCard = tokensCard()
 
         walletPage = page(overviewCard, tokensCard, sendCard)
-        nodePage = page(networkCard, chainCard)
+        nodePage = page(networkCard, chainCard, nodeServiceCard())
         accountPage = page(guideCard(), walletCard, moreCard())
         val fill = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
@@ -363,9 +368,13 @@ class MainActivity : Activity() {
             if (keystoreOrNull() == null) OverviewState.NoWallet else OverviewState.Idle,
         )
         setStatus(startupMessage(), if (staleSoon == null) Tone.NEUTRAL else Tone.WARN)
+        stopNodeListen = NodeRuntime.listen { snapshot ->
+            runOnUiThread { renderNode(snapshot) }
+        }
     }
 
     override fun onDestroy() {
+        stopNodeListen()
         io.shutdown()
         super.onDestroy()
     }
@@ -1156,6 +1165,15 @@ class MainActivity : Activity() {
                 }
             }
             REQUEST_SCAN_QR -> {
+                val airgap = data?.getStringExtra(ScanActivity.EXTRA_RESULT_AIRGAP)
+                if (!airgap.isNullOrBlank()) {
+                    if (keystoreOrNull() == null) {
+                        setStatus("Create or import a wallet before signing an air-gap code.", Tone.WARN)
+                        return
+                    }
+                    startActivity(Intent(this, AirgapSignActivity::class.java).putExtra(AirgapSignActivity.EXTRA_PAYLOAD, airgap))
+                    return
+                }
                 val address = data?.getStringExtra(ScanActivity.EXTRA_RESULT_ADDRESS)
                 if (!address.isNullOrBlank()) {
                     fillRecipient(address, "Address read from the code.")
@@ -1761,6 +1779,55 @@ class MainActivity : Activity() {
     private fun resetChainPanel() {
         setChainState("Not checked yet.", Tone.NEUTRAL)
         chainMeta.text = chainPreview()
+    }
+
+    private fun nodeServiceCard(): LinearLayout = card().apply {
+        addStack(sectionLabel("Mobile node"))
+        nodePhase = TextView(this@MainActivity).apply {
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(MUTED)
+            text = NodeRuntime.PHASE_STOPPED
+        }
+        addStack(nodePhase, 2)
+        nodeMeta = monoValue("").apply { setTextColor(MUTED) }
+        addStack(nodeMeta, 8)
+        addStack(button("Start node") { startNode() }, 14)
+        addStack(button("Stop node", filled = false) { stopNode() }, 10)
+        addStack(
+            caption(
+                "Chain 5 headers are checked on this phone. The service pauses on mobile data or while the battery is not charging.",
+            ),
+            12,
+        )
+        renderNode(NodeRuntime.snapshot)
+    }
+
+    private fun startNode() {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 77)
+        }
+        val intent = Intent(this, KovanicaNodeService::class.java)
+            .setAction(KovanicaNodeService.ACTION_START)
+            .putExtra(KovanicaNodeService.EXTRA_CHAIN_ID, chainIdField().toLong())
+        if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
+    }
+
+    private fun stopNode() {
+        startService(Intent(this, KovanicaNodeService::class.java).setAction(KovanicaNodeService.ACTION_STOP))
+    }
+
+    private fun renderNode(snapshot: NodeRuntime.Snapshot) {
+        if (!::nodePhase.isInitialized) return
+        nodePhase.text = snapshot.phase
+        nodeMeta.text = "round ${snapshot.round}  ·  work ${snapshot.work}\n" +
+            "cumulative ${snapshot.cumulative}\n" +
+            "target_bits ${snapshot.targetBits}\n" +
+            "pow ${snapshot.powHash}\n" +
+            "GHOSTDAG K=${snapshot.ghostdagK}  ·  target ${snapshot.targetMs} ms\n" +
+            "pruning ${snapshot.pruningRounds} rounds  ·  cache ${snapshot.cacheMb} MiB\n" +
+            "local RPC ${snapshot.bind}\n" +
+            snapshot.note
     }
 
     private fun chainPreview(): String =

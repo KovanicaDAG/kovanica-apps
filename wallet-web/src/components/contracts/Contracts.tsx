@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { checkAddress } from "@/core/address";
 import { buildContractCall } from "@/core/contracts";
 import { parseAtoms, parseKvnc } from "@/core/format";
@@ -18,7 +18,7 @@ const CONTRACTS = [
 
 type ContractId = (typeof CONTRACTS)[number]["id"];
 
-export function Contracts({ onReview }: { onReview: (preview: TxPreview) => void }) {
+export function Contracts({ onReview, prefill }: { onReview: (preview: TxPreview) => void; prefill?: { address: string; kind: ContractId } | null }) {
   const net = useNetwork();
   const lock = signingLock(net);
   const policyChain = net.probedChainId ?? presetById(net.presetId).expectedChainId;
@@ -42,6 +42,14 @@ export function Contracts({ onReview }: { onReview: (preview: TxPreview) => void
   const [error, setError] = useState<string | null>(null);
   const selected = CONTRACTS.find((item) => item.id === contractId)!;
   const address = checkAddress(contract, policyChain);
+
+  useEffect(() => {
+    if (!prefill) return;
+    setContract(prefill.address);
+    setContractId(prefill.kind);
+    const next = CONTRACTS.find((item) => item.id === prefill.kind);
+    if (next) setMethod(next.methods[0]);
+  }, [prefill]);
 
   function needs(name: string) {
     return (

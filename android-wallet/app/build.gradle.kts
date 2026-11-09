@@ -45,12 +45,17 @@ android {
             java.srcDir(projectDir.resolve("../../android-chain/src/test/kotlin"))
         }
     }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
     implementation("net.java.dev.jna:jna:5.14.0@aar")
     implementation(files("libs/core-3.5.4.jar"))
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }
 
 // JNA registers every UniFFI symbol on the first call (`faucetAllowed` in

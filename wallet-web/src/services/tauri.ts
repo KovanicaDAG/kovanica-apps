@@ -23,3 +23,33 @@ export async function onWalletLock(handler: () => void): Promise<Unlisten> {
     for (const stop of stops) stop();
   };
 }
+
+export type CallSignArgs = {
+  contract: string;
+  method: string;
+  argsHex: string;
+  value: string;
+  gasLimit: string;
+  fee: string;
+  nonce: number;
+  chainId: number;
+};
+
+export function signCallHd(args: CallSignArgs & { bip39Passphrase: string; accountIndex: number }): Promise<string> {
+  return tauriInvoke<string>("wallet_sign_call_hd", args);
+}
+
+export function signCall(args: CallSignArgs): Promise<string> {
+  return tauriInvoke<string>("wallet_sign_call", args);
+}
+
+export async function revealMnemonic(passphrase: string): Promise<string> {
+  const result = await tauriInvoke<string | { mnemonic?: string }>("wallet_reveal", { passphrase });
+  if (typeof result === "string" && result.trim()) return result;
+  if (result && typeof result === "object" && typeof result.mnemonic === "string" && result.mnemonic.trim()) return result.mnemonic;
+  throw new Error("desktop signer did not return a phrase");
+}
+
+export function touchSession(): Promise<void> {
+  return tauriInvoke<void>("wallet_touch");
+}

@@ -9,6 +9,12 @@ const RPC_METHODS = new Set([
   "kovanica_sendRawTransaction",
   "kovanica_getTransactionReceipt",
   "kovanica_blockNumber",
+  "kovanica_getStorage",
+  "kovanica_call",
+  "kovanica_getDagInfo",
+  "kovanica_getBlockTemplate",
+  "kovanica_getBlockByRound",
+  "kovanica_getLeaderHeader",
 ]);
 
 type RpcInput = { rpcUrl: string; method: string; params: unknown[] };
