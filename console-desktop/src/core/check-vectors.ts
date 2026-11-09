@@ -1,4 +1,5 @@
 import { blake3 } from "@noble/hashes/blake3.js";
+import { acceptSigned, exportUnsigned } from "./airgap";
 import { checkAddress, decodeAddress, encodeAddress } from "./address";
 import { asciiPad, bytesToHex, concat, hexToBytes, u64le } from "./bytes";
 import { buildContractCall } from "./contracts";
@@ -134,5 +135,45 @@ if (bytesToHex(keyed) !== bytesToHex(signingHash(callTx, 2))) throw new Error("c
 const rawCall = encodeRawTransaction(callTx, signature, keyed);
 const wire = hexToBytes(rawCall).slice(40, 44);
 if (bytesToHex(wire) !== "06000000") throw new Error(`wire kind ${bytesToHex(wire)}`);
+
+const airTransfer = {
+  v: 1 as const,
+  role: "signed" as const,
+  kind: "transfer" as const,
+  wire: 0 as const,
+  tag: 0 as const,
+  chainId: 2,
+  networkName: "vector",
+  from: address,
+  to: encodeAddress(to),
+  amount: "1000000",
+  fee: "1000",
+  nonce: "5",
+  method: "",
+  args: "",
+  value: "0",
+  gas: "0",
+  sig: bytesToHex(signature),
+  raw,
+};
+const accepted = acceptSigned(JSON.stringify(airTransfer));
+if (accepted.hash !== expectHash || accepted.raw !== raw) throw new Error("airgap transfer import mismatch");
+const airCall = exportUnsigned({
+  kind: "call",
+  sender: address,
+  counterparty: encodeAddress(contractKey),
+  amountAtoms: "0",
+  feeAtoms: "10",
+  nonce: "1",
+  chainId: 2,
+  networkName: "vector",
+  method: "withdraw",
+  argsHex: bytesToHex(withdraw.args),
+  valueAtoms: "0",
+  gasLimit: "100000",
+  pathLabel: "vector",
+  details: [],
+});
+if (airCall.wire !== 6 || airCall.tag !== 4) throw new Error("airgap call must use wire 6 and tag 4");
 
 console.log("vectors ok", address);
