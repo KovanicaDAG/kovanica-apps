@@ -1,15 +1,28 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { formatRemaining, remainingMs } from "@/core/idle";
 import { backupJson, restoreBackup } from "@/services/backup";
 import { revealWithPassword } from "@/services/wallet";
+import { useIdle } from "@/stores/idle";
 import { LOCK_CHOICES, useSettings } from "@/stores/settings";
+import { useSession } from "@/stores/session";
 
 export function SettingsDrawer({ onClose }: { onClose: () => void }) {
   const minutes = useSettings((s) => s.lockMinutes);
   const setMinutes = useSettings((s) => s.setLockMinutes);
+  const activityAt = useIdle((s) => s.at);
+  const status = useSession((s) => s.status);
+  const [now, setNow] = useState(() => Date.now());
   const [password, setPassword] = useState("");
   const [phrase, setPhrase] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const left = remainingMs(minutes, activityAt, now);
 
   function download() {
     const blob = new Blob([backupJson()], { type: "application/json" });
@@ -66,6 +79,7 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
             </button>
           ))}
         </div>
+        <p className="mt-3 text-sm text-paper">{status === "unlocked" ? `Locks in ${formatRemaining(left)}` : "Wallet is locked."}</p>
         <h3 className="mt-8 text-sm tracking-wide text-muted uppercase">Backup</h3>
         <p className="mt-2 text-sm text-muted">Exports the encrypted keystore from this browser, plus contacts and the watchlist. The phrase is not in the file.</p>
         <button type="button" className="mt-3 min-h-11 rounded-full border border-line px-4 text-paper" onClick={download}>Export backup</button>

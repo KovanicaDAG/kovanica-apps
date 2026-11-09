@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { acceptSigned, exportUnsigned } from "@/core/airgap";
 import type { TxPreview } from "@/core/session";
 import { reviewRows } from "@/services/tx";
@@ -22,6 +22,18 @@ export function ConfirmTx({
   const [payload, setPayload] = useState<string | null>(null);
   const [incoming, setIncoming] = useState("");
   const unsigned = JSON.stringify(exportUnsigned(preview));
+  const takeSigned = useCallback((text: string) => {
+    try {
+      const signed = acceptSigned(text);
+      if (signed.doc.chainId !== preview.chainId) {
+        toast(`This signature is for chain ${signed.doc.chainId}. The review is chain ${preview.chainId}.`);
+        return;
+      }
+      onImport({ raw: signed.raw, hash: signed.hash });
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "That payload was rejected");
+    }
+  }, [onImport, preview.chainId]);
 
   return (
     <div className="fixed inset-0 z-30 flex items-end justify-center bg-ink/80 p-4 sm:items-center" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
@@ -71,6 +83,7 @@ export function ConfirmTx({
               </button>
             </div>
           ) : null}
+          <ScanSigned busy={busy} onText={takeSigned} />
           <label className="mt-4 grid gap-1 text-sm text-muted">
             Signed payload from the phone
             <textarea className="min-h-24 rounded-2xl border border-line bg-ink p-3 font-mono text-xs text-paper" value={incoming} onChange={(e) => setIncoming(e.target.value)} placeholder='{"v":1,"role":"signed",...}' />
@@ -79,19 +92,80 @@ export function ConfirmTx({
             type="button"
             className="mt-3 min-h-11 rounded-full border border-copper px-4 text-sm text-copper disabled:opacity-40"
             disabled={busy || !incoming.trim()}
-            onClick={() => {
-              try {
-                const signed = acceptSigned(incoming.trim());
-                onImport({ raw: signed.raw, hash: signed.hash });
-              } catch (error) {
-                toast(error instanceof Error ? error.message : "That payload was rejected");
-              }
-            }}
+            onClick={() => takeSigned(incoming.trim())}
           >
             Import signed transaction
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+type DetectedCode = { rawValue?: string };
+type QrDetector = { detect: (source: CanvasImageSource) => Promise<DetectedCode[]> };
+
+function ScanSigned({ busy, onText }: { busy: boolean; onText: (text: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let stop = false;
+    let stream: MediaStream | null = null;
+    const host = window as Window & { BarcodeDetector?: new (options: { formats: string[] }) => QrDetector };
+    if (!host.BarcodeDetector || !navigator.mediaDevices?.getUserMedia) {
+      setNote("This browser cannot read a QR from the camera. Paste the signed JSON instead.");
+      return;
+    }
+    const detector = new host.BarcodeDetector({ formats: ["qr_code"] });
+    void navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } }).then(async (next) => {
+      stream = next;
+      const video = videoRef.current;
+      if (!video || stop) {
+        next.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      video.srcObject = next;
+      await video.play();
+      const tick = async () => {
+        if (stop || !videoRef.current) return;
+        try {
+          const codes = await detector.detect(videoRef.current);
+          const raw = codes[0]?.rawValue;
+          if (raw) {
+            stop = true;
+            setOpen(false);
+            onText(raw);
+            return;
+          }
+        } catch {
+          // The frame is not ready yet.
+        }
+        if (!stop) requestAnimationFrame(() => void tick());
+      };
+      void tick();
+    }).catch(() => setNote("The camera was not available."));
+    return () => {
+      stop = true;
+      stream?.getTracks().forEach((track) => track.stop());
+    };
+  }, [open, onText]);
+
+  return (
+    <div className="mt-4">
+      <button type="button" className="min-h-11 rounded-full border border-line px-4 text-sm text-paper" disabled={busy} onClick={() => { setNote(null); setOpen(true); }}>
+        Scan signed QR
+      </button>
+      {note ? <p className="mt-2 text-sm text-clay">{note}</p> : null}
+      {open ? (
+        <div className="mt-3 grid gap-2">
+          <video ref={videoRef} className="w-full max-w-xs rounded-2xl bg-ink" muted playsInline />
+          <p className="text-sm text-muted">Point this at the phone's signed QR. A valid code is checked and sent with kovanica_sendRawTransaction.</p>
+          <button type="button" className="min-h-11 w-fit text-sm text-copper" onClick={() => setOpen(false)}>Close camera</button>
+        </div>
+      ) : null}
     </div>
   );
 }

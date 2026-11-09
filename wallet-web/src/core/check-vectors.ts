@@ -5,6 +5,7 @@ import { asciiPad, bytesToHex, concat, hexToBytes, u64le } from "./bytes";
 import { buildContractCall } from "./contracts";
 import { bip39Seed, deriveBip44, deriveHardened, entropyFromPhrase, generatePhrase, hdPrivateKey, isValidMnemonic, masterFromSeed } from "./hd";
 import { encodeRawTransaction, publicKeyFromSeed, signHash, signingHash } from "./tx";
+import { formatRemaining, remainingMs } from "./idle";
 
 const seed = new Uint8Array(32).fill(0x07);
 const sender = publicKeyFromSeed(seed);
@@ -175,5 +176,11 @@ const airCall = exportUnsigned({
   details: [],
 });
 if (airCall.wire !== 6 || airCall.tag !== 4) throw new Error("airgap call must use wire 6 and tag 4");
+if (remainingMs(1, 0, 30_000) !== 30_000) throw new Error("1m idle left 30s");
+if (remainingMs(5, 0, 0) !== 300_000) throw new Error("5m idle is 300s");
+if (remainingMs(15, 1_000, 1_000 + 15 * 60_000) !== 0) throw new Error("15m idle expired");
+if (remainingMs(60, 0, 1_000) !== 60 * 60_000 - 1_000) throw new Error("60m idle countdown");
+if (formatRemaining(61_000) !== "1:01") throw new Error("countdown format");
+if (formatRemaining(0) !== "0:00") throw new Error("countdown zero");
 
 console.log("vectors ok", address);

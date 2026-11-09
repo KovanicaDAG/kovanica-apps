@@ -18,6 +18,8 @@ import { SendForm } from "@/components/send/SendForm";
 import { SettingsDrawer } from "@/components/settings/SettingsDrawer";
 import { Watchlist } from "@/components/watch/Watchlist";
 import { useSettings } from "@/stores/settings";
+import { useIdle } from "@/stores/idle";
+import { remainingMs } from "@/core/idle";
 import type { WatchKind } from "@/stores/watch";
 
 import { toast } from "sonner";
@@ -34,6 +36,8 @@ export function WalletApp() {
   const [sendTo, setSendTo] = useState("");
   const [contractPrefill, setContractPrefill] = useState<{ address: string; kind: WatchKind } | null>(null);
   const lockMinutes = useSettings((s) => s.lockMinutes);
+  const activityAt = useIdle((s) => s.at);
+  const bumpIdle = useIdle((s) => s.bump);
   const session = useSession();
   const net = useNetwork();
   const lockState = signingLock(net);
@@ -95,10 +99,20 @@ export function WalletApp() {
   }, [ready, session.status, account?.address, net.online, net.presetId, net.probedChainId]);
 
   useEffect(() => {
+    const mark = () => bumpIdle();
+    window.addEventListener("pointerdown", mark);
+    window.addEventListener("keydown", mark);
+    return () => {
+      window.removeEventListener("pointerdown", mark);
+      window.removeEventListener("keydown", mark);
+    };
+  }, [bumpIdle]);
+
+  useEffect(() => {
     if (session.status !== "unlocked") return;
-    const timer = window.setTimeout(() => void lock(), lockMinutes * 60 * 1000);
+    const timer = window.setTimeout(() => void lock(), remainingMs(lockMinutes, activityAt, Date.now()));
     return () => window.clearTimeout(timer);
-  }, [session.status, tab, lockMinutes]);
+  }, [session.status, lockMinutes, activityAt]);
 
   useEffect(() => {
     if (!ready || !net.online) return;
