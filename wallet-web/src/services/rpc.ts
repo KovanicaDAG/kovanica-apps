@@ -129,15 +129,12 @@ export async function receipt(rpcUrl: string, hash: string): Promise<{ status: "
     try {
       const result = await post(candidate, "kovanica_getTransactionReceipt", [hash]);
       if (result == null) return { status: "pending", height: null };
-      const record = asRecord(result);
-      if (!record) return { status: "pending", height: null };
-      const height = pickNumber(record, ["height", "blockHeight", "block_height", "committedHeight"]);
+      const record = asRecord(result) ?? {};
       const statusText = String(record.status ?? record.outcome ?? "").toLowerCase();
+      const height = pickNumber(record, ["blockHeight", "block_height", "height", "committedHeight"]);
       if (statusText.includes("fail") || record.success === false) return { status: "failed", height };
-      if (height != null || statusText.includes("confirm") || record.success === true) {
-        return { status: "confirmed", height };
-      }
-      return { status: "pending", height };
+      if (statusText.includes("pend")) return { status: "pending", height };
+      return { status: "confirmed", height };
     } catch {
       continue;
     }
@@ -147,6 +144,59 @@ export async function receipt(rpcUrl: string, hash: string): Promise<{ status: "
 
 export async function indexerLogs(url: string): Promise<unknown> {
   const result = await proxyIndexer({ data: { url } });
-  if (!result.ok) throw new Error(`indexer returned ${result.status}`);
+  if (!result.ok) throw new Error("indexer did not respond");
   return parseJson(result.body);
+}
+
+export async function readContract(rpcUrl: string, address: string, method: string, storageKey: string): Promise<{ call: string; storage: string }> {
+  let call = "not returned";
+  let storage = "not returned";
+  for (const candidate of withRpcPath(rpcUrl)) {
+    try {
+      call = present(await post(candidate, "kovanica_call", [address, method, storageKey]));
+      break;
+    } catch (error) {
+      call = error instanceof Error ? error.message : "call failed";
+    }
+  }
+  for (const candidate of withRpcPath(rpcUrl)) {
+    try {
+      storage = present(await post(candidate, "kovanica_getStorage", [address, storageKey]));
+      break;
+    } catch (error) {
+      storage = error instanceof Error ? error.message : "storage failed";
+    }
+  }
+  return { call, storage };
+}
+
+function present(value: unknown): string {
+  const amount = quantity(value);
+  if (amount != null && (typeof value !== "object" || value === null)) return amount.toString();
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "unreadable result";
+  }
+}
+
+async function tryMethod(rpcUrl: string, method: string, params: unknown[]): Promise<string> {
+  let last = "not returned";
+  for (const candidate of withRpcPath(rpcUrl)) {
+    try {
+      return present(await post(candidate, method, params));
+    } catch (error) {
+      last = error instanceof Error ? error.message : last;
+    }
+  }
+  return last;
+}
+
+export async function readNodeWatch(rpcUrl: string): Promise<{ dag: string; template: string }> {
+  const [dag, template] = await Promise.all([
+    tryMethod(rpcUrl, "kovanica_getDagInfo", []),
+    tryMethod(rpcUrl, "kovanica_getBlockTemplate", []),
+  ]);
+  return { dag, template };
 }

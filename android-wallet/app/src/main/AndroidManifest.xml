@@ -49,6 +49,11 @@
             android:label="Scan"
             android:configChanges="orientation|screenSize|keyboardHidden" />
         <activity
+            android:name=".AirgapSignActivity"
+            android:exported="false"
+            android:label="Air-gap sign"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+        <activity
             android:name=".CreateTokenActivity"
             android:exported="false"
             android:label="Create token"

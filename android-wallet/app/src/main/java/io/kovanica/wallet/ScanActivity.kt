@@ -389,6 +389,14 @@ class ScanActivity : Activity(), TextureView.SurfaceTextureListener {
     private fun handleText(text: String) {
         if (done) return
         val trimmed = text.trim()
+        if (trimmed.startsWith("{") && trimmed.contains("\"role\":\"unsigned\"") && trimmed.contains("\"v\":1")) {
+            done = true
+            runOnUiThread {
+                setResult(RESULT_OK, Intent().putExtra(EXTRA_RESULT_AIRGAP, trimmed))
+                finish()
+            }
+            return
+        }
         if (KvncAddress.isValid(trimmed, NetworkPrefs.chainId(this))) {
             done = true
             runOnUiThread {
@@ -536,6 +544,7 @@ class ScanActivity : Activity(), TextureView.SurfaceTextureListener {
     companion object {
         /** The decoded address, in whatever form the code carried, when [RESULT_OK]. */
         const val EXTRA_RESULT_ADDRESS: String = "io.kovanica.wallet.SCAN_RESULT"
+        const val EXTRA_RESULT_AIRGAP: String = "io.kovanica.wallet.SCAN_AIRGAP"
 
         private const val REQUEST_CAMERA: Int = 41
 

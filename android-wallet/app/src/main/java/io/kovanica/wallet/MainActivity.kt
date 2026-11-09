@@ -1156,6 +1156,15 @@ class MainActivity : Activity() {
                 }
             }
             REQUEST_SCAN_QR -> {
+                val airgap = data?.getStringExtra(ScanActivity.EXTRA_RESULT_AIRGAP)
+                if (!airgap.isNullOrBlank()) {
+                    if (keystoreOrNull() == null) {
+                        setStatus("Create or import a wallet before signing an air-gap code.", Tone.WARN)
+                        return
+                    }
+                    startActivity(Intent(this, AirgapSignActivity::class.java).putExtra(AirgapSignActivity.EXTRA_PAYLOAD, airgap))
+                    return
+                }
                 val address = data?.getStringExtra(ScanActivity.EXTRA_RESULT_ADDRESS)
                 if (!address.isNullOrBlank()) {
                     fillRecipient(address, "Address read from the code.")

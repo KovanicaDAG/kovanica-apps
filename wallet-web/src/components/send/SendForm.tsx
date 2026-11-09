@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { checkAddress } from "@/core/address";
 import { formatAtoms, formatKvnc, parseAtoms, parseKvnc } from "@/core/format";
 import type { TxPreview } from "@/core/session";
@@ -7,11 +7,11 @@ import { buildTransferPreview } from "@/services/wallet";
 import { signingLock, useNetwork } from "@/stores/network";
 import { presetById } from "@/lib/networks";
 
-export function SendForm({ onReview }: { onReview: (preview: TxPreview) => void }) {
+export function SendForm({ onReview, prefillTo = "" }: { onReview: (preview: TxPreview) => void; prefillTo?: string }) {
   const net = useNetwork();
   const lock = signingLock(net);
   const policyChain = net.probedChainId ?? presetById(net.presetId).expectedChainId;
-  const [to, setTo] = useState("");
+  const [to, setTo] = useState(prefillTo);
   const [amount, setAmount] = useState("");
   const [feeText, setFeeText] = useState("");
   const [nonceText, setNonceText] = useState("");
@@ -21,6 +21,10 @@ export function SendForm({ onReview }: { onReview: (preview: TxPreview) => void 
   const fee = feeText.trim() ? parseAtoms(feeText) : net.feeAtoms;
   const amountAtoms = parseKvnc(amount);
   const nonce = nonceText.trim() ? parseAtoms(nonceText) : net.nonce;
+
+  useEffect(() => {
+    if (prefillTo) setTo(prefillTo);
+  }, [prefillTo]);
 
   function max() {
     if (net.balanceAtoms == null || fee == null) return;
