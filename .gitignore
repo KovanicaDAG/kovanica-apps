@@ -8,3 +8,5 @@ target/
 build/
 **/build/
 android-wallet/app/src/main/jniLibs/
+.vercel/
+**/.vercel/
