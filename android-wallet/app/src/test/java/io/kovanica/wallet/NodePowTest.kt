@@ -93,5 +93,28 @@ class NodePowTest {
         val snap = NodeRuntime.Snapshot()
         assertEquals("http://127.0.0.1:8545", snap.rpcUrl)
         assertFalse(snap.rpcRunning)
+        assertFalse(snap.miningEnabled)
+        assertFalse(snap.isThermalGated)
+        assertEquals(0L, snap.blocksMined)
+    }
+
+    @Test
+    fun node_pow_thermal_protection_gate() {
+        // Below 36.0°C (360 tenths) is safe
+        assertTrue(NodePow.isThermalSafe(350))
+        assertTrue(NodePow.isThermalSafe(359))
+        // 36.0°C and above triggers thermal throttling
+        assertFalse(NodePow.isThermalSafe(360))
+        assertFalse(NodePow.isThermalSafe(385))
+        assertFalse(NodePow.isThermalSafe(420))
+        // Simulator / no battery sensor
+        assertTrue(NodePow.isThermalSafe(0))
+    }
+
+    @Test
+    fun node_store_mine_header_graceful_on_missing_native_or_invalid_json() {
+        val res = NodeStore.mineBlockHeader("invalid json", 100uL, 0uL)
+        // Must catch cleanly and return null without crashing
+        assertEquals(null, res)
     }
 }

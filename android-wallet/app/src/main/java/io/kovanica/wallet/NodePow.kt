@@ -10,6 +10,13 @@ object NodePow {
         return wifi && unmetered && charging
     }
 
+    const val MAX_BATTERY_TEMP_TENTHS = 360 // 36.0°C thermal protection gate
+
+    fun isThermalSafe(batteryTempTenths: Int): Boolean {
+        if (batteryTempTenths <= 0) return true // simulator / mock without battery sensor
+        return batteryTempTenths < MAX_BATTERY_TEMP_TENTHS
+    }
+
     fun findHeader(value: Any?): JSONObject? {
         when (value) {
             is JSONObject -> {

@@ -716,6 +716,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_lock(
     ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_mine_pow_block_header(
+    ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_prune_local_node_storage(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_registry_decode_entry(
@@ -821,6 +823,8 @@ internal object UniffiLib {
     ): Byte
     external fun uniffi_kovanica_light_ffi_fn_func_lock(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_kovanica_light_ffi_fn_func_mine_pow_block_header(`headerJson`: RustBuffer.ByValue,`maxHashes`: Long,`nonceStart`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_prune_local_node_storage(`dbPath`: RustBuffer.ByValue,`cutoffRound`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_registry_decode_entry(`valueHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1052,6 +1056,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_lock() != 53030) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_mine_pow_block_header() != 27244) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_prune_local_node_storage() != 39694) {
@@ -1849,6 +1856,67 @@ public object FfiConverterTypeLocalStorageStats: FfiConverterRustBuffer<LocalSto
             FfiConverterULong.write(value.`totalBlocks`, buf)
             FfiConverterULong.write(value.`totalDagBlocks`, buf)
             FfiConverterULong.write(value.`sizeBytes`, buf)
+    }
+}
+
+
+
+/**
+ * Result of bounded Proof-of-Work micro-mining on mobile device.
+ */
+data class MinedPowResult (
+    var `found`: kotlin.Boolean
+    , 
+    var `nonce`: kotlin.ULong
+    , 
+    var `powHashHex`: kotlin.String
+    , 
+    var `hashesComputed`: kotlin.ULong
+    , 
+    var `elapsedMillis`: kotlin.ULong
+    , 
+    var `blockHeaderJson`: kotlin.String?
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeMinedPowResult: FfiConverterRustBuffer<MinedPowResult> {
+    override fun read(buf: ByteBuffer): MinedPowResult {
+        return MinedPowResult(
+            FfiConverterBoolean.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: MinedPowResult) = (
+            FfiConverterBoolean.allocationSize(value.`found`) +
+            FfiConverterULong.allocationSize(value.`nonce`) +
+            FfiConverterString.allocationSize(value.`powHashHex`) +
+            FfiConverterULong.allocationSize(value.`hashesComputed`) +
+            FfiConverterULong.allocationSize(value.`elapsedMillis`) +
+            FfiConverterOptionalString.allocationSize(value.`blockHeaderJson`)
+    )
+
+    override fun write(value: MinedPowResult, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`found`, buf)
+            FfiConverterULong.write(value.`nonce`, buf)
+            FfiConverterString.write(value.`powHashHex`, buf)
+            FfiConverterULong.write(value.`hashesComputed`, buf)
+            FfiConverterULong.write(value.`elapsedMillis`, buf)
+            FfiConverterOptionalString.write(value.`blockHeaderJson`, buf)
     }
 }
 
@@ -2793,6 +2861,24 @@ public object FfiConverterSequenceTypeLocalExecutionReceipt: FfiConverterRustBuf
         _status)
 }
     
+    
+
+        /**
+         * Run a bounded Proof-of-Work search (KovanicaHash) on the mobile device.
+         * Designed for thermal-gated micro-mining bursts on Chain 5 (Hybrid Testnet).
+         */
+    @Throws(LightFfiException::class) fun `minePowBlockHeader`(`headerJson`: kotlin.String, `maxHashes`: kotlin.ULong, `nonceStart`: kotlin.ULong): MinedPowResult {
+            return FfiConverterTypeMinedPowResult.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_mine_pow_block_header(
+    
+        
+        FfiConverterString.lower(`headerJson`),
+        FfiConverterULong.lower(`maxHashes`),
+        FfiConverterULong.lower(`nonceStart`),_status)
+}
+    )
+    }
     
 
         /**

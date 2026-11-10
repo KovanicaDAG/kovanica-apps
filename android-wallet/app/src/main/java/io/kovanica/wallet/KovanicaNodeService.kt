@@ -113,6 +113,13 @@ class KovanicaNodeService : Service() {
             NodeRuntime.publish(this, NodeRuntime.snapshot.copy(phase = NodeRuntime.PHASE_STOPPED, note = "The mobile node profile did not load."))
             return
         }
+        val batteryIntent = registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val tempTenths = batteryIntent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0
+        val tempCelsius = tempTenths / 10.0f
+        val thermalSafe = NodePow.isThermalSafe(tempTenths)
+        val miningConfigured = NodePrefs.microMiningEnabled(this) && chainId == HYBRID_CHAIN
+        val thermalGated = miningConfigured && !thermalSafe
+
         val base = NodeRuntime.Snapshot(
             phase = NodeRuntime.PHASE_RUNNING,
             round = "—",
@@ -120,7 +127,7 @@ class KovanicaNodeService : Service() {
             work = "—",
             cumulative = "—",
             targetBits = "—",
-            note = "",
+            note = if (thermalGated) "Thermal protection: battery ${tempCelsius}°C >= 36.0°C. Mining suspended." else "",
             pruningRounds = profile.pruningWindowRounds.toString(),
             cacheMb = profile.maxRedbCacheMb.toString(),
             bind = profile.localRpcBind,
@@ -142,6 +149,9 @@ class KovanicaNodeService : Service() {
             },
             rpcUrl = "http://${profile.localRpcBind}",
             rpcRunning = NodeStore.isLocalRpcActive(),
+            miningEnabled = miningConfigured,
+            miningTempCelsius = tempCelsius,
+            isThermalGated = thermalGated,
         )
         if (!allowsSync(NodePrefs.wifiAndChargingOnly(this))) {
             NodeRuntime.publish(this, base.copy(phase = NodeRuntime.PHASE_PAUSED, note = "Paused until the phone is on unmetered Wi-Fi and charging."))
@@ -197,7 +207,21 @@ class KovanicaNodeService : Service() {
             val remembered = NodeStore.save(this, verified.round.toLong(), header.toString())
             val interval = AirgapReview.intervalLabel(NodeStore.recentTimestamps(this), profile.targetBlockMs.toLong())
             val tone = AirgapReview.intervalTone(NodeStore.recentTimestamps(this), profile.targetBlockMs.toLong())
-            val syncNote = if (p2pResult != null && p2pResult.syncedBlocks > 0uL) {
+            var minedCount = NodeRuntime.snapshot.blocksMined
+            var currentHashrate = NodeRuntime.snapshot.miningHashRate
+            if (miningConfigured && thermalSafe && allowsSync(true)) {
+                val mineRes = NodeStore.mineBlockHeader(header.toString(), 2_500uL, 0uL)
+                if (mineRes != null) {
+                    val hps = if (mineRes.elapsedMillis > 0uL) (mineRes.hashesComputed * 1000uL / mineRes.elapsedMillis) else mineRes.hashesComputed
+                    currentHashrate = "$hps H/s"
+                    if (mineRes.found) {
+                        minedCount++
+                    }
+                }
+            }
+            val syncNote = if (thermalGated) {
+                "Thermal protection: battery ${tempCelsius}°C >= 36.0°C. Mining suspended."
+            } else if (p2pResult != null && p2pResult.syncedBlocks > 0uL) {
                 "P2P synced ${p2pResult.syncedBlocks} blocks (tip: ${p2pResult.newTipRound}). Verified on phone."
             } else {
                 "Verified on this phone."
@@ -217,6 +241,11 @@ class KovanicaNodeService : Service() {
                     intervalLine = interval,
                     intervalTone = tone,
                     stateRoot = stateRoot,
+                    miningEnabled = miningConfigured,
+                    miningHashRate = currentHashrate,
+                    miningTempCelsius = tempCelsius,
+                    blocksMined = minedCount,
+                    isThermalGated = thermalGated,
                 ),
             )
         } catch (error: Exception) {
@@ -292,6 +321,11 @@ object NodeRuntime {
         val stateRoot: String = "—",
         val rpcUrl: String = "http://127.0.0.1:8545",
         val rpcRunning: Boolean = false,
+        val miningEnabled: Boolean = false,
+        val miningHashRate: String = "—",
+        val miningTempCelsius: Float = 0.0f,
+        val blocksMined: Long = 0L,
+        val isThermalGated: Boolean = false,
     )
 
     @Volatile
@@ -316,6 +350,7 @@ object NodeRuntime {
 /** User override for the profile's Wi-Fi and charging gate. Default is on. */
 object NodePrefs {
     private const val KEY = "node_wifi_charging_only"
+    private const val KEY_MINING = "node_micro_mining_enabled"
 
     fun wifiAndChargingOnly(context: Context): Boolean =
         context.getSharedPreferences(NetworkPrefs.PREFS, Context.MODE_PRIVATE).getBoolean(KEY, true)
@@ -324,6 +359,16 @@ object NodePrefs {
         context.getSharedPreferences(NetworkPrefs.PREFS, Context.MODE_PRIVATE)
             .edit()
             .putBoolean(KEY, enabled)
+            .apply()
+    }
+
+    fun microMiningEnabled(context: Context): Boolean =
+        context.getSharedPreferences(NetworkPrefs.PREFS, Context.MODE_PRIVATE).getBoolean(KEY_MINING, false)
+
+    fun setMicroMiningEnabled(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(NetworkPrefs.PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_MINING, enabled)
             .apply()
     }
 }
@@ -411,6 +456,16 @@ object NodeStore {
         return runCatching {
             uniffi.kovanica_light.isLocalRpcServerRunning()
         }.getOrDefault(false)
+    }
+
+    fun mineBlockHeader(
+        headerJson: String,
+        maxHashes: ULong = 10_000uL,
+        nonceStart: ULong = 0uL
+    ): uniffi.kovanica_light.MinedPowResult? {
+        return runCatching {
+            uniffi.kovanica_light.minePowBlockHeader(headerJson, maxHashes, nonceStart)
+        }.getOrNull()
     }
 
     fun save(context: Context, round: Long, headerJson: String): Int {
