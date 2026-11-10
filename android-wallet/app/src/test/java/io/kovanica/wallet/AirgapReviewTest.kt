@@ -48,6 +48,7 @@ class AirgapReviewTest {
         assertTrue(callRows.any { it == "Method: withdraw" })
         assertTrue(callRows.any { it == "Arguments: aa" })
         assertTrue(callRows.any { it == "Gas limit: 100000" })
+        assertTrue(callRows.any { it == "Value: 0 atoms" })
     }
 
     @Test

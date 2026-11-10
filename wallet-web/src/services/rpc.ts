@@ -150,6 +150,7 @@ export type ReceiptView = {
   code: "0x1" | "0x0" | null;
   error: string | null;
   logs: number;
+  events: string[];
 };
 
 export async function receipt(rpcUrl: string, hash: string): Promise<ReceiptView | null> {
@@ -177,6 +178,7 @@ async function receiptOnce(
         code: view.status === "revert" ? "0x0" : pending ? null : "0x1",
         error: view.error,
         logs: view.logs.length,
+        events: view.logs.map((log) => log.topics[0] || "event").slice(0, 4),
       };
     } catch {
       continue;

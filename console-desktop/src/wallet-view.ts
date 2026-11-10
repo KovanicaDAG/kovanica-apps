@@ -6,6 +6,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 import { mountContracts } from "./contracts-panel";
+import { historyHeading as rowTitle, receiptStatusLine } from "./core/history-row";
+import { outboxRows, subscribeOutbox } from "./core/outbox";
 
 import {
   EMPTY_HISTORY,
@@ -148,6 +150,7 @@ export function mountWallet(shownChainId: () => string | null): void {
   showPhraseButton.textContent = SHOW_PHRASE_AGAIN;
   showPhraseOpenButton.textContent = SHOW_PHRASE_AGAIN;
   historyHeading.textContent = HISTORY_HEADING;
+  subscribeOutbox(() => paintHistory(lastHistory));
 
   function showError(message: string): void {
     errorText.hidden = false;
@@ -224,12 +227,20 @@ export function mountWallet(shownChainId: () => string | null): void {
     } else if (pendingClaim) {
       pendingClaim = null;
     }
-    historyEmpty.hidden = transfers.length !== 0;
+    historyEmpty.hidden = transfers.length !== 0 || outboxRows().length !== 0;
     historyEmpty.textContent = EMPTY_HISTORY;
+    for (const row of outboxRows()) {
+      const item = document.createElement("li");
+      const status = receiptStatusLine(row.code, row.status, row.error);
+      const gas = row.gasUsed ? ` gas ${row.gasUsed}` : "";
+      const events = row.events.length ? ` events ${row.events.join(", ")}` : "";
+      item.textContent = `${rowTitle("contract", row.method)} ${row.method} ${row.counterparty} ${status}${gas}${events} ${row.hash}`;
+      historyList.append(item);
+    }
     for (const row of transfers) {
       const item = document.createElement("li");
       const where = row.pending ? "pending" : `height ${row.height ?? ""}`;
-      item.textContent = `${row.direction} ${row.amountDisplay} KUNA (${row.amountAtoms} atoms) ${row.counterparty} ${where} ${row.transactionHash}`;
+      item.textContent = `${rowTitle(row.direction, "")} ${row.amountDisplay} KUNA (${row.amountAtoms} atoms) ${row.counterparty} ${where} ${row.transactionHash}`;
       historyList.append(item);
     }
   }

@@ -135,7 +135,7 @@ class HistoryActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        head.addView(kindBadge(entry.kind))
+        head.addView(kindBadge(entry))
         head.addView(
             TextView(this@HistoryActivity).apply {
                 text = stamps.format(Date(entry.timestampMs))
@@ -156,9 +156,10 @@ class HistoryActivity : Activity() {
             coinFor(entry),
             LinearLayout.LayoutParams(dp(28), dp(28)),
         )
+        val method = entry.method
         amountRow.addView(
             TextView(this@HistoryActivity).apply {
-                text = amountLine(entry)
+                text = if (method.isNullOrBlank()) amountLine(entry) else method
                 setTextColor(WalletUi.TEXT)
                 textSize = 18f
                 typeface = Typeface.DEFAULT_BOLD
@@ -169,6 +170,17 @@ class HistoryActivity : Activity() {
             ).apply { leftMargin = dp(10) },
         )
         addView(amountRow)
+
+        val shownAmount = entry.amount
+        val shownSymbol = entry.symbol
+        if (!method.isNullOrBlank() && !shownAmount.isNullOrBlank()) {
+            addMuted(if (shownSymbol.isNullOrBlank()) shownAmount else "$shownAmount $shownSymbol")
+        }
+        receiptLine(entry)?.let { addMuted(it) }
+        val gas = entry.gasUsed
+        if (!gas.isNullOrBlank()) addMuted("gas $gas")
+        val events = entry.events
+        if (!events.isNullOrBlank()) addMuted("events $events")
 
         counterpartyLine(entry)?.let { line ->
             addView(TextView(this@HistoryActivity).apply {
@@ -191,10 +203,10 @@ class HistoryActivity : Activity() {
 
     // --- small pieces --------------------------------------------------------------------
 
-    private fun kindBadge(kind: String): TextView {
-        val (foreground, background) = kindColors(kind)
+    private fun kindBadge(entry: HistoryEntry): TextView {
+        val (foreground, background) = kindColors(entry.kind)
         return TextView(this).apply {
-            text = kindLabel(kind)
+            text = badgeLabel(entry)
             setTextColor(foreground)
             textSize = 10f
             letterSpacing = 0.14f
@@ -202,6 +214,34 @@ class HistoryActivity : Activity() {
             setPadding(dp(8), dp(3), dp(8), dp(3))
             this.background = WalletUi.rounded(this@HistoryActivity, background, 8)
         }
+    }
+
+    private fun badgeLabel(entry: HistoryEntry): String = when (entry.method?.let { ContractCalls.family(it) }) {
+        "Token" -> "TOKEN"
+        "HTLC" -> "HTLC"
+        "Vault" -> "VAULT"
+        "Multisig" -> "MULTISIG"
+        "Contract" -> "CALL"
+        else -> kindLabel(entry.kind)
+    }
+
+    private fun receiptLine(entry: HistoryEntry): String? {
+        val code = entry.receiptCode
+        if (code == "0x0" || entry.status == "revert" || entry.status == "failed") {
+            return if (entry.errorText.isNullOrBlank()) "0x0 Reverted" else "0x0 Reverted: ${entry.errorText}"
+        }
+        if (code == "0x1" || entry.status == "success") return "0x1 Success"
+        if (entry.kind == HistoryEntry.KIND_CONTRACT || !entry.method.isNullOrBlank()) return "Pending"
+        return null
+    }
+
+    private fun LinearLayout.addMuted(text: String) {
+        addView(TextView(this@HistoryActivity).apply {
+            this.text = text
+            setTextColor(WalletUi.MUTED)
+            textSize = 12f
+            setPadding(0, dp(4), 0, 0)
+        })
     }
 
     private fun kindLabel(kind: String): String = when (kind) {

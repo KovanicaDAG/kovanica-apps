@@ -18,8 +18,14 @@ object AirgapReview {
             if (call) "Contract: ${doc.optString("to")}" else "Recipient: ${doc.optString("to")}",
         )
         if (call) {
-            rows += "Method: ${doc.optString("method").ifBlank { "—" }}"
-            rows += "Arguments: ${argsSummary(doc.optString("args"))}"
+            val decoded = ContractCalls.describe(doc.optString("method"), doc.optString("args"), doc.optLong("chainId"))
+            if (decoded != null) {
+                rows += decoded
+            } else {
+                rows += "Method: ${doc.optString("method").ifBlank { "—" }}"
+                rows += "Arguments: ${argsSummary(doc.optString("args"))}"
+            }
+            rows += "Value: ${doc.optString("value", "0")} atoms"
             rows += "Gas limit: ${doc.optString("gas", "0")}"
         } else {
             rows += "Amount: ${kvnc(amount)}"

@@ -11,8 +11,10 @@ import {
   type ContractName,
 } from "@/core/contracts";
 import { parseAtoms } from "@/core/format";
+import { callNeed, shortfall } from "@/core/history-row";
 import type { TxPreview } from "@/core/session";
 import { ContactSelect } from "@/components/contacts/ContactSelect";
+import { FaucetButton } from "@/components/home/FaucetButton";
 import { presetById } from "@/lib/networks";
 import { buildCallPreview } from "@/services/wallet";
 import { readStorageAt } from "@/services/rpc";
@@ -274,6 +276,12 @@ export function Contracts({
         </>
       ) : null}
       {lock.locked && current.sign ? <p className="text-sm text-clay">{lock.reason}</p> : null}
+      {current.sign && net.balanceAtoms != null && shortfall(net.balanceAtoms, callNeed(current.id, value || "0", (net.feeAtoms ?? 0n).toString(), amount)) > 0n ? (
+        <div className="rounded-2xl border border-clay px-4 py-3 text-sm text-clay">
+          <p>Balance is short by {shortfall(net.balanceAtoms, callNeed(current.id, value || "0", (net.feeAtoms ?? 0n).toString(), amount)).toString()} atoms for this call value and fee.</p>
+          {ownerAddress ? <div className="mt-3"><FaucetButton address={ownerAddress} onlyHybrid /></div> : null}
+        </div>
+      ) : null}
       {error ? <p className="text-sm text-clay">{error}</p> : null}
       {readout ? <p className="text-sm break-words text-paper">{readout}</p> : null}
       <button type="submit" className="min-h-12 rounded-full bg-copper font-medium text-copper-ink disabled:opacity-40" disabled={current.sign ? lock.locked : reading}>

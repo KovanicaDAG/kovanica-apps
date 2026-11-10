@@ -18,6 +18,7 @@ export type ActivityRow = {
   code?: string | null;
   error?: string | null;
   logs?: number | null;
+  events?: string[] | null;
 };
 
 const KEY = "kvnc.activity.v1";
@@ -37,7 +38,7 @@ type ActivityState = {
   indexerNote: string;
   hydrate: () => void;
   push: (row: ActivityRow) => void;
-  mark: (hash: string, status: TxStatus, height: number | null, extra?: { gasUsed?: string | null; code?: string | null; error?: string | null; logs?: number | null }) => void;
+  mark: (hash: string, status: TxStatus, height: number | null, extra?: { gasUsed?: string | null; code?: string | null; error?: string | null; logs?: number | null; events?: string[] | null }) => void;
   mergeIncoming: (rows: ActivityRow[]) => void;
   setIndexerNote: (indexerNote: string) => void;
 };

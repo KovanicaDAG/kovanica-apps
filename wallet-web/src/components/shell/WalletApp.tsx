@@ -147,6 +147,7 @@ export function WalletApp() {
               code: result.code,
               error: result.error,
               logs: result.logs,
+              events: result.events,
             });
           }
         }),

@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { acceptSigned, exportUnsigned } from "@/core/airgap";
+import { callNeed, leadingAtoms, shortfall } from "@/core/history-row";
 import type { TxPreview } from "@/core/session";
 import { reviewRows } from "@/services/tx";
+import { useNetwork } from "@/stores/network";
+import { FaucetButton } from "@/components/home/FaucetButton";
 import { toast } from "sonner";
 
 export type BroadcastNotice =
@@ -36,6 +39,12 @@ export function ConfirmTx({
   const [payload, setPayload] = useState<string | null>(null);
   const [incoming, setIncoming] = useState("");
   const unsigned = JSON.stringify(exportUnsigned(preview));
+  const balance = useNetwork((state) => state.balanceAtoms);
+  const pull = preview.kind === "call" && (preview.method === "htlc_create" || preview.method === "vault_create")
+    ? leadingAtoms(preview.details.find((row) => row.label === "Amount")?.value ?? "0")
+    : "0";
+  const need = preview.kind === "call" ? callNeed(preview.method, preview.valueAtoms, preview.feeAtoms, pull) : 0n;
+  const missing = balance == null ? 0n : shortfall(balance, need);
   const takeSigned = useCallback((text: string) => {
     try {
       const signed = acceptSigned(text);
@@ -66,6 +75,14 @@ export function ConfirmTx({
             </div>
           ))}
         </dl>
+        {preview.kind === "call" && missing > 0n ? (
+          <div className="mt-4 rounded-2xl border border-clay px-4 py-3 text-sm text-clay">
+            <p>Balance is short by {missing.toString()} atoms for this call value and fee.</p>
+            <div className="mt-3">
+              <FaucetButton address={preview.sender} onlyHybrid />
+            </div>
+          </div>
+        ) : null}
         <div className="mt-5 grid grid-cols-2 gap-3">
           <button type="button" className="min-h-11 rounded-full border border-line text-paper" onClick={onCancel} disabled={busy}>
             Back
