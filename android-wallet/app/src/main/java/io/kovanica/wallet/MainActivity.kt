@@ -1869,6 +1869,8 @@ class MainActivity : Activity() {
             "${snapshot.pruningBadge}\n" +
             "Verified headers in window: ${snapshot.headerCount}\n" +
             "Local DB: ${dbLabel(snapshot.storeBytes, snapshot.cacheMb)}\n" +
+            "${snapshot.peerLine}\n" +
+            "${snapshot.intervalLine}\n" +
             snapshot.note
     }
 

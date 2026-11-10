@@ -7,7 +7,7 @@ import { buildTransferPreview } from "@/services/wallet";
 import { signingLock, useNetwork } from "@/stores/network";
 import { presetById } from "@/lib/networks";
 
-export function SendForm({ onReview, prefillTo = "" }: { onReview: (preview: TxPreview) => void; prefillTo?: string }) {
+export function SendForm({ onReview, prefillTo = "", quoteTick = 0 }: { onReview: (preview: TxPreview) => void; prefillTo?: string; quoteTick?: number }) {
   const net = useNetwork();
   const lock = signingLock(net);
   const policyChain = net.probedChainId ?? presetById(net.presetId).expectedChainId;
@@ -25,6 +25,12 @@ export function SendForm({ onReview, prefillTo = "" }: { onReview: (preview: TxP
   useEffect(() => {
     if (prefillTo) setTo(prefillTo);
   }, [prefillTo]);
+
+  useEffect(() => {
+    if (quoteTick === 0) return;
+    setFeeText("");
+    setNonceText("");
+  }, [quoteTick]);
 
   function max() {
     if (net.balanceAtoms == null || fee == null) return;

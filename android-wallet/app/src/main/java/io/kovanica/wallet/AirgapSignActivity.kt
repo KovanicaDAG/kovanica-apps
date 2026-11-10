@@ -43,6 +43,7 @@ class AirgapSignActivity : Activity() {
     private lateinit var bip39Field: EditText
     private lateinit var accountField: EditText
     private lateinit var clearButton: Button
+    private lateinit var exportButton: Button
     private lateinit var form: LinearLayout
     private var active: JSONObject? = null
     private val hideSigned = Runnable { clearSigned("Signed QR hidden. Nothing was broadcast.") }
@@ -72,6 +73,8 @@ class AirgapSignActivity : Activity() {
         }
         clearButton = WalletUi.button(this, "Clear signed QR", filled = false) { clearSigned("Signed QR cleared. Nothing was broadcast.") }
         clearButton.visibility = View.GONE
+        exportButton = WalletUi.button(this, "Save signed JSON", filled = false) { exportSigned() }
+        exportButton.visibility = View.GONE
         form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
@@ -93,6 +96,7 @@ class AirgapSignActivity : Activity() {
         root.addView(qr, gap())
         root.addView(signedText, gap())
         root.addView(clearButton, gap())
+        root.addView(exportButton, gap())
         setContentView(ScrollView(this).apply { addView(root) })
         present(payload, announce = payload.isNotBlank())
     }
@@ -105,6 +109,11 @@ class AirgapSignActivity : Activity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == SAVE_JSON) {
+            if (resultCode == RESULT_OK) writeSigned(data?.data)
+            if (exportButton.visibility == View.VISIBLE) qr.postDelayed(hideSigned, 60_000)
+            return
+        }
         if (requestCode != OPEN_JSON || resultCode != RESULT_OK) return
         val uri = data?.data ?: return
         val text = runCatching {
@@ -117,6 +126,36 @@ class AirgapSignActivity : Activity() {
             return
         }
         present(text, announce = true)
+    }
+
+    private fun exportSigned() {
+        val nonce = active?.optString("nonce").orEmpty().filter { it.isDigit() }.ifEmpty { "0" }
+        val body = signedText.text?.toString().orEmpty()
+        if (body.isBlank()) {
+            status.text = "Sign the transaction before saving it."
+            return
+        }
+        qr.removeCallbacks(hideSigned)
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/json"
+            putExtra(Intent.EXTRA_TITLE, "kovanica-tx-signed-$nonce.json")
+        }
+        startActivityForResult(intent, SAVE_JSON)
+    }
+
+    private fun writeSigned(uri: android.net.Uri?) {
+        val body = signedText.text?.toString().orEmpty()
+        if (uri == null || body.isBlank()) {
+            status.text = "The signed file was not saved."
+            return
+        }
+        val error = runCatching {
+            contentResolver.openOutputStream(uri)?.use { stream ->
+                stream.write(body.toByteArray(Charsets.UTF_8))
+            } ?: error("The downloads folder did not accept the file.")
+        }.exceptionOrNull()
+        status.text = error?.message ?: "Saved kovanica-tx-signed.json. Nothing was broadcast."
     }
 
     private fun pickUnsigned() {
@@ -271,6 +310,7 @@ class AirgapSignActivity : Activity() {
         signedText.text = signed
         qr.setImageBitmap(runCatching { qrBitmap(signed, dp(280)) }.getOrNull())
         clearButton.visibility = View.VISIBLE
+        exportButton.visibility = View.VISIBLE
         qr.removeCallbacks(hideSigned)
         qr.postDelayed(hideSigned, 60_000)
     }
@@ -280,6 +320,7 @@ class AirgapSignActivity : Activity() {
         qr.setImageDrawable(null)
         signedText.text = ""
         clearButton.visibility = View.GONE
+        exportButton.visibility = View.GONE
         status.text = message
     }
 
@@ -329,5 +370,6 @@ class AirgapSignActivity : Activity() {
         const val EXTRA_PAYLOAD: String = "io.kovanica.wallet.AIRGAP_PAYLOAD"
         private const val PREFS: String = "kvnc"
         private const val OPEN_JSON: Int = 41
+        private const val SAVE_JSON: Int = 42
     }
 }

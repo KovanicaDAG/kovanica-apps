@@ -10,7 +10,7 @@ import { useActivity } from "@/stores/activity";
 import { signingLock, useNetwork } from "@/stores/network";
 import { useSession } from "@/stores/session";
 import { ActivityList } from "@/components/activity/ActivityList";
-import { ConfirmTx } from "@/components/confirm/ConfirmTx";
+import { ConfirmTx, type BroadcastNotice } from "@/components/confirm/ConfirmTx";
 import { Contracts } from "@/components/contracts/Contracts";
 import { Onboarding } from "@/components/onboarding/Onboarding";
 import { Receive } from "@/components/receive/Receive";
@@ -30,6 +30,8 @@ export function WalletApp() {
   const [ready, setReady] = useState(true);
   const [tab, setTab] = useState<Tab>("home");
   const [preview, setPreview] = useState<TxPreview | null>(null);
+  const [notice, setNotice] = useState<BroadcastNotice>({ phase: "idle" });
+  const [quoteTick, setQuoteTick] = useState(0);
   const [signing, setSigning] = useState(false);
   const [backup, setBackup] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -141,9 +143,11 @@ export function WalletApp() {
   async function publish(raw: string, hash: string) {
     if (!preview) return;
     const preset = presetById(net.presetId);
+    setNotice({ phase: "sending", label: preset.label });
     const broadcastHash = await broadcast(preset.rpcUrl, raw);
+    const shown = broadcastHash || hash;
     useActivity.getState().push({
-      hash: broadcastHash || hash,
+      hash: shown,
       status: "pending",
       direction: preview.kind === "transfer" ? "sent" : "contract",
       amountAtoms: preview.kind === "transfer" ? preview.amountAtoms : preview.valueAtoms,
@@ -154,9 +158,7 @@ export function WalletApp() {
       height: null,
       note: preview.method,
     });
-    setPreview(null);
-    setTab("activity");
-    toast("Transaction broadcast");
+    setNotice({ phase: "ok", label: preset.label, hash: shown });
   }
 
   async function confirm() {
@@ -166,7 +168,7 @@ export function WalletApp() {
       const signed = await signReviewed(preview);
       await publish(signed.raw, signed.hash);
     } catch (error) {
-      toast(error instanceof Error ? error.message : "Broadcast failed");
+      setNotice({ phase: "error", message: error instanceof Error ? error.message : "Broadcast failed" });
     } finally {
       setSigning(false);
     }
@@ -178,10 +180,36 @@ export function WalletApp() {
     try {
       await publish(signed.raw, signed.hash);
     } catch (error) {
-      toast(error instanceof Error ? error.message : "Broadcast failed");
+      setNotice({ phase: "error", message: error instanceof Error ? error.message : "Broadcast failed" });
     } finally {
       setSigning(false);
     }
+  }
+
+  function editDraft() {
+    setNotice({ phase: "idle" });
+    setPreview(null);
+  }
+
+  async function requote() {
+    try {
+      if (account) {
+        const preset = presetById(net.presetId);
+        const state = await readAccount(preset.rpcUrl, account.address);
+        useNetwork.getState().setAccountState(state.balance, state.nonce, state.fee);
+      }
+      setQuoteTick((tick) => tick + 1);
+      setNotice({ phase: "idle" });
+      setPreview(null);
+    } catch (error) {
+      setNotice({ phase: "error", message: error instanceof Error ? error.message : "Could not re-quote the fee" });
+    }
+  }
+
+  function finishBroadcast() {
+    setNotice({ phase: "idle" });
+    setPreview(null);
+    setTab("activity");
   }
 
   if (session.status !== "unlocked") {
@@ -268,10 +296,10 @@ export function WalletApp() {
               <p className="text-xs text-muted">Chain {net.probedChainId ?? "—"} · expected {presetById(net.presetId).expectedChainId ?? "reported"} · {chainName(net.probedChainId)}</p>
             </div>
           ) : null}
-          {tab === "send" ? <SendForm onReview={setPreview} prefillTo={sendTo} /> : null}
+          {tab === "send" ? <SendForm onReview={(next) => { setNotice({ phase: "idle" }); setPreview(next); }} prefillTo={sendTo} quoteTick={quoteTick} /> : null}
           {tab === "receive" && account ? <Receive address={account.address} pathLabel={account.pathLabel} /> : null}
           {tab === "activity" ? <ActivityList /> : null}
-          {tab === "contracts" ? <Contracts onReview={setPreview} prefill={contractPrefill} /> : null}
+          {tab === "contracts" ? <Contracts onReview={(next) => { setNotice({ phase: "idle" }); setPreview(next); }} prefill={contractPrefill} /> : null}
           {tab === "watch" ? (
             <Watchlist
               onSend={(address) => { setSendTo(address); setTab("send"); }}
@@ -280,7 +308,7 @@ export function WalletApp() {
           ) : null}
         </section>
       </div>
-      {preview ? <ConfirmTx preview={preview} busy={signing} onCancel={() => setPreview(null)} onConfirm={() => void confirm()} onImport={(signed) => void importSigned(signed)} /> : null}
+      {preview ? <ConfirmTx preview={preview} busy={signing} notice={notice} onCancel={editDraft} onConfirm={() => void confirm()} onImport={(signed) => void importSigned(signed)} onEdit={editDraft} onRequote={() => void requote()} onDone={finishBroadcast} /> : null}
       {settingsOpen ? <SettingsDrawer onClose={() => setSettingsOpen(false)} /> : null}
       {backup ? (
         <div className="fixed inset-0 z-40 grid place-items-center bg-ink/90 p-5">

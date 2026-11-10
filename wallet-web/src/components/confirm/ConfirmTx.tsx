@@ -4,18 +4,32 @@ import type { TxPreview } from "@/core/session";
 import { reviewRows } from "@/services/tx";
 import { toast } from "sonner";
 
+export type BroadcastNotice =
+  | { phase: "idle" }
+  | { phase: "sending"; label: string }
+  | { phase: "ok"; label: string; hash: string }
+  | { phase: "error"; message: string };
+
 export function ConfirmTx({
   preview,
   busy,
+  notice,
   onCancel,
   onConfirm,
   onImport,
+  onEdit,
+  onRequote,
+  onDone,
 }: {
   preview: TxPreview;
   busy: boolean;
+  notice: BroadcastNotice;
   onCancel: () => void;
   onConfirm: () => void;
   onImport: (signed: { raw: string; hash: string }) => void;
+  onEdit: () => void;
+  onRequote: () => void;
+  onDone: () => void;
 }) {
   const rows = reviewRows(preview);
   const [qr, setQr] = useState<string | null>(null);
@@ -43,6 +57,7 @@ export function ConfirmTx({
           Confirm transaction
         </h2>
         <p className="mt-2 text-sm text-muted">Nothing is signed until you confirm. The chain id below is the one the node reported.</p>
+        <BroadcastBanner notice={notice} busy={busy} onEdit={onEdit} onRequote={onRequote} onDone={onDone} />
         <dl className="mt-5 space-y-3">
           {rows.map((row) => (
             <div key={row.label} className="grid gap-1 border-b border-line pb-3">
@@ -88,6 +103,20 @@ export function ConfirmTx({
           ) : null}
           <ScanSigned busy={busy} onText={takeSigned} />
           <label className="mt-4 grid gap-1 text-sm text-muted">
+            Load signed JSON
+            <input
+              className="text-sm text-paper"
+              type="file"
+              accept="application/json,.json"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                if (!file) return;
+                void file.text().then((text) => takeSigned(text));
+              }}
+            />
+          </label>
+          <label className="mt-4 grid gap-1 text-sm text-muted">
             Signed payload from the phone
             <textarea className="min-h-24 rounded-2xl border border-line bg-ink p-3 font-mono text-xs text-paper" value={incoming} onChange={(e) => setIncoming(e.target.value)} placeholder='{"v":1,"role":"signed",...}' />
           </label>
@@ -100,6 +129,42 @@ export function ConfirmTx({
             Import signed transaction
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function BroadcastBanner({
+  notice,
+  busy,
+  onEdit,
+  onRequote,
+  onDone,
+}: {
+  notice: BroadcastNotice;
+  busy: boolean;
+  onEdit: () => void;
+  onRequote: () => void;
+  onDone: () => void;
+}) {
+  if (notice.phase === "idle") return null;
+  if (notice.phase === "sending") {
+    return <p className="mt-4 rounded-2xl border border-line bg-ink px-4 py-3 text-sm text-paper">Broadcasting to {notice.label}...</p>;
+  }
+  if (notice.phase === "ok") {
+    return (
+      <div className="mt-4 rounded-2xl border border-sage bg-ink px-4 py-3">
+        <p className="text-sm text-sage">Transaction broadcast successful! TxHash: {notice.hash}</p>
+        <button type="button" className="mt-3 min-h-11 rounded-full border border-line px-4 text-sm text-paper" onClick={onDone}>Done</button>
+      </div>
+    );
+  }
+  return (
+    <div className="mt-4 rounded-2xl border border-clay bg-ink px-4 py-3">
+      <p className="text-sm text-clay">{notice.message}</p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button type="button" className="min-h-11 rounded-full border border-line px-4 text-sm text-paper" onClick={onEdit} disabled={busy}>Edit</button>
+        <button type="button" className="min-h-11 rounded-full border border-copper px-4 text-sm text-copper" onClick={onRequote} disabled={busy}>Re-quote</button>
       </div>
     </div>
   );

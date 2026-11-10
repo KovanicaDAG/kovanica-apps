@@ -1,8 +1,10 @@
 package io.kovanica.wallet
 
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -61,5 +63,24 @@ class AirgapReviewTest {
     fun footprint_uses_the_cache_limit() {
         assertEquals("0 B / 64 MiB limit", AirgapReview.footprint(0))
         assertEquals("240 KB / 64 MiB limit", AirgapReview.footprint(240L * 1024L))
+    }
+
+    @Test
+    fun peer_count_reads_sync_status_or_a_peer_list() {
+        assertEquals("3", AirgapReview.peerCount(JSONObject().put("peerCount", 3)))
+        assertEquals("2", AirgapReview.peerCount(JSONArray().put("a").put("b")))
+        assertNull(AirgapReview.peerCount(JSONObject()))
+    }
+
+    @Test
+    fun recent_headers_produce_a_block_interval() {
+        assertEquals(
+            "Recent block interval: not enough verified headers",
+            AirgapReview.intervalLabel(listOf(1_000L), 4_000L),
+        )
+        assertEquals(
+            "Recent block interval: 4.0s (target 4s)",
+            AirgapReview.intervalLabel(listOf(0L, 4_000L), 4_000L),
+        )
     }
 }

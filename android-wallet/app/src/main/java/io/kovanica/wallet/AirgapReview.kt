@@ -1,5 +1,6 @@
 package io.kovanica.wallet
 
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** Readable checks for an unsigned air-gap payload. No UI types. */
@@ -43,6 +44,41 @@ object AirgapReview {
         if (kb < 1024L) return "$kb KB"
         val mb = (bytes + (512L * 1024L)) / (1024L * 1024L)
         return "$mb MiB"
+    }
+
+    fun peerCount(value: Any?): String? {
+        return when (value) {
+            is JSONArray -> value.length().toString()
+            is JSONObject -> {
+                val direct = if (value.has("peerCount")) value.opt("peerCount") else value.opt("peer_count")
+                when (direct) {
+                    is Number -> direct.toLong().toString()
+                    is String -> direct.toLongOrNull()?.toString()
+                    else -> {
+                        val peers = value.opt("peers")
+                        if (peers is JSONArray) peers.length().toString() else null
+                    }
+                }
+            }
+            else -> null
+        }
+    }
+
+    fun medianIntervalMs(timestamps: List<Long>): Long? {
+        val sorted = timestamps.filter { it > 0L }.distinct().sorted()
+        if (sorted.size < 2) return null
+        val gaps = sorted.zipWithNext { earlier, later -> later - earlier }.filter { it > 0L }.sorted()
+        if (gaps.isEmpty()) return null
+        return gaps[gaps.size / 2]
+    }
+
+    fun intervalLabel(timestamps: List<Long>, targetMs: Long): String {
+        val median = medianIntervalMs(timestamps) ?: return "Recent block interval: not enough verified headers"
+        val tenths = (median + 50L) / 100L
+        val whole = tenths / 10L
+        val frac = tenths % 10L
+        val target = if (targetMs > 0L && targetMs % 1000L == 0L) "${targetMs / 1000L}s" else "${targetMs} ms"
+        return "Recent block interval: $whole.${frac}s (target $target)"
     }
 
     private fun argsSummary(args: String): String {

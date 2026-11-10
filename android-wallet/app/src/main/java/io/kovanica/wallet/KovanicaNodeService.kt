@@ -119,19 +119,26 @@ class KovanicaNodeService : Service() {
             headerCount = NodeStore.count(this).toString(),
             storeBytes = NodeStore.databaseBytes(this).toString(),
             pruningBadge = NodeStore.BADGE,
+            peerLine = "peers: — / ${profile.maxPeers} max",
+            intervalLine = if (chainId == HYBRID_CHAIN) {
+                AirgapReview.intervalLabel(NodeStore.recentTimestamps(this), profile.targetBlockMs.toLong())
+            } else {
+                "Recent block interval: shown on chain 5"
+            },
         )
         if (!allowsSync(NodePrefs.wifiAndChargingOnly(this))) {
             NodeRuntime.publish(this, base.copy(phase = PHASE_PAUSED, note = "Paused until the phone is on unmetered Wi-Fi and charging."))
             schedule()
             return
         }
+        val client = NodeClient(NetworkPrefs.rpc(this))
+        val withPeers = base.copy(peerLine = "peers: ${readPeerCount(client)} / ${profile.maxPeers} max")
         if (chainId != HYBRID_CHAIN) {
-            NodeRuntime.publish(this, base.copy(note = "PoW header checks run on chain 5. This profile is chain $chainId."))
+            NodeRuntime.publish(this, withPeers.copy(note = "PoW header checks run on chain 5. This profile is chain $chainId."))
             schedule()
             return
         }
         try {
-            val client = NodeClient(NetworkPrefs.rpc(this))
             val dag = client.call("kovanica_getDagInfo", JSONArray())
             var header = NodePow.findHeader(dag)
             if (header == null) {
@@ -144,7 +151,7 @@ class KovanicaNodeService : Service() {
                 header = NodePow.findHeader(client.call("kovanica_getLeaderHeader", JSONArray()))
             }
             if (header == null) {
-                NodeRuntime.publish(this, base.copy(note = "The node did not return a PoW header."))
+                NodeRuntime.publish(this, withPeers.copy(note = "The node did not return a PoW header."))
                 schedule()
                 return
             }
@@ -161,9 +168,10 @@ class KovanicaNodeService : Service() {
             val parentRound = parentRound(parent)
             if (parentRound != null) NodeStore.save(this, parentRound, parent)
             val remembered = NodeStore.save(this, verified.round.toLong(), header.toString())
+            val interval = AirgapReview.intervalLabel(NodeStore.recentTimestamps(this), profile.targetBlockMs.toLong())
             NodeRuntime.publish(
                 this,
-                base.copy(
+                withPeers.copy(
                     round = verified.round.toString(),
                     powHash = verified.powHash,
                     work = verified.work,
@@ -172,12 +180,20 @@ class KovanicaNodeService : Service() {
                     note = "Verified on this phone.",
                     headerCount = remembered.toString(),
                     storeBytes = NodeStore.databaseBytes(this).toString(),
+                    intervalLine = interval,
                 ),
             )
         } catch (error: Exception) {
-            NodeRuntime.publish(this, base.copy(note = error.message ?: "The header check failed."))
+            NodeRuntime.publish(this, withPeers.copy(note = error.message ?: "The header check failed."))
         }
         schedule()
+    }
+
+    private fun readPeerCount(client: NodeClient): String {
+        val sync = runCatching { client.call("kovanica_syncStatus", JSONArray()) }.getOrNull()
+        AirgapReview.peerCount(sync)?.let { return it }
+        val peers = runCatching { client.call("kovanica_getPeers", JSONArray()) }.getOrNull()
+        return AirgapReview.peerCount(peers) ?: "—"
     }
 
     private fun parentRound(parent: String): Long? {
@@ -234,6 +250,8 @@ object NodeRuntime {
         val headerCount: String = "0",
         val storeBytes: String = "0",
         val pruningBadge: String = "Pruning window: 14,400 rounds (~16h)",
+        val peerLine: String = "peers: — / 12 max",
+        val intervalLine: String = "Recent block interval: —",
     )
 
     @Volatile
@@ -290,6 +308,24 @@ object NodeStore {
             if (stored !in kept) file.delete()
         }
         return kept.size
+    }
+
+    fun recentTimestamps(context: Context, limit: Int = 32): List<Long> {
+        val dir = File(context.filesDir, "headers")
+        if (!dir.isDirectory) return emptyList()
+        return dir.listFiles().orEmpty()
+            .mapNotNull { file -> roundOf(file)?.let { round -> round to file } }
+            .sortedBy { it.first }
+            .takeLast(limit)
+            .mapNotNull { (_, file) ->
+                val obj = runCatching { JSONObject(file.readText()) }.getOrNull() ?: return@mapNotNull null
+                val stamp = when {
+                    obj.has("timestamp") -> obj.optLong("timestamp", -1L)
+                    obj.has("timestamp_ms") -> obj.optLong("timestamp_ms", -1L)
+                    else -> -1L
+                }
+                stamp.takeIf { it > 0L }
+            }
     }
 
     fun databaseBytes(context: Context): Long {
