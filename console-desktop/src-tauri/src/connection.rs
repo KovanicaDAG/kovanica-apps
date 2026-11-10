@@ -260,7 +260,7 @@ pub fn pinned_committees() -> &'static [PinnedCommittee] {
 
 /// Chain ids that may receive `kovanica_requestAirdrop`. Mainnet is never included.
 pub fn faucet_chain_allowed(chain_id: &str) -> bool {
-    matches!(chain_id, "3" | "5" | "1337")
+    matches!(chain_id, "2" | "3" | "1337")
 }
 
 /// Hash from a string result or an object carrying `hash`, `txHash`, or `transactionHash`.
@@ -469,7 +469,7 @@ fn prove_hybrid_pow(
             peer_count,
             peers,
             None,
-            "Chain 5 does not use committee seals. The node did not return a PoW header this console could verify.",
+            "Chain 2 does not use committee seals. The node did not return a PoW header this console could verify.",
         ));
     };
     let parent = parent_header_json(&header);
@@ -498,7 +498,7 @@ fn prove_hybrid_pow(
                 peers,
                 Some(verified.round.to_string()),
                 &format!(
-                    "Verified Hybrid PoW header. Round {}. target_bits {}. Work {}. Cumulative work {}. powHash {}. GHOSTDAG K=5, target 4s. No committee seals on chain 5.",
+                    "Verified Hybrid PoW header. Round {}. target_bits {}. Work {}. Cumulative work {}. powHash {}. GHOSTDAG K=5, target 4s. No committee seals on chain 2.",
                     verified.round, target, verified.work, cumulative, verified.pow_hash
                 ),
             ))
@@ -508,7 +508,7 @@ fn prove_hybrid_pow(
             peer_count,
             peers,
             header_u64(&header, &["round"]).map(|round| round.to_string()),
-            &format!("Chain 5 PoW header did not verify: {err}"),
+            &format!("Chain 2 PoW header did not verify: {err}"),
         )),
     }
 }
@@ -915,11 +915,12 @@ mod tests {
 
     #[test]
     fn faucet_allows_devnet_hybrid_and_local_only() {
-        assert!(faucet_chain_allowed("5"));
+        assert!(faucet_chain_allowed("2"));
         assert!(faucet_chain_allowed("3"));
         assert!(faucet_chain_allowed("1337"));
         assert!(!faucet_chain_allowed("1"));
         assert!(!faucet_chain_allowed("4"));
+        assert!(!faucet_chain_allowed("5"));
         assert_eq!(
             airdrop_hash(&json!("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")),
             Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string())
@@ -929,10 +930,10 @@ mod tests {
             Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string())
         );
         assert_eq!(airdrop_hash(&json!({})), None);
-        assert_eq!(faucet_chain_id(Some("1"), &json!({"chainId": 5})), None);
+        assert_eq!(faucet_chain_id(Some("1"), &json!({"chainId": 2})), None);
         assert_eq!(
-            faucet_chain_id(Some("5"), &json!({})).as_deref(),
-            Some("5")
+            faucet_chain_id(Some("2"), &json!({})).as_deref(),
+            Some("2")
         );
         assert_eq!(
             faucet_chain_id(None, &json!({"chain_id": "1337"})).as_deref(),
@@ -1143,18 +1144,18 @@ mod tests {
     }
 
     #[test]
-    fn chain_five_skips_committee_seals_when_no_pow_header_is_present() {
+    fn chain_two_skips_committee_seals_when_no_pow_header_is_present() {
         struct Hybrid;
         impl Rpc for Hybrid {
             fn call(&self, method: &str, _params: Value) -> Result<Value, ConnError> {
                 match method {
                     "kovanica_blockNumber" => Ok(json!("0x2a")),
                     "kovanica_syncStatus" => Ok(json!({
-                        "chainId": 5,
+                        "chainId": chain_id::HYBRID_TESTNET,
                         "peerCount": 1,
                         "peers": [{"peerId": "12D3KooWexample", "reportedTipRound": 9}]
                     })),
-                    "kovanica_getDagInfo" => Ok(json!({"chainId": 5, "tipRound": 9})),
+                    "kovanica_getDagInfo" => Ok(json!({"chainId": chain_id::HYBRID_TESTNET, "tipRound": 9})),
                     "kovanica_getBlockByRound" => Err(ConnError::Rejected("no block".to_string())),
                     "kovanica_getLeaderHeader" => Ok(Value::Null),
                     other => Err(ConnError::Rejected(format!("unexpected method {other}"))),
@@ -1163,7 +1164,7 @@ mod tests {
         }
         let status = fetch_status(&Hybrid, DEFAULT_RPC_URL).unwrap();
         assert_eq!(status.chain_id, None);
-        assert!(status.chain_note.contains("Chain 5"));
+        assert!(status.chain_note.contains("Chain 2"));
         assert!(!status.chain_note.contains("Commit seals"));
     }
 

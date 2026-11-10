@@ -18,9 +18,9 @@ export function shortfall(balance: bigint, need: bigint): bigint {
   return balance >= need ? 0n : need - balance;
 }
 
-/** Inline faucet on the contract form. Chain 5 and local 1337 only. */
+/** Inline faucet on the contract form. Chain 2 and local 1337 only. */
 export function faucetQuick(chainId: number | null): boolean {
-  return chainId === 5 || chainId === 1337;
+  return chainId === 2 || chainId === 1337;
 }
 
 export function contractFamily(method: string): "Token" | "HTLC" | "Vault" | "Multisig" | null {

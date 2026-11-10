@@ -7,7 +7,7 @@ export const ADDRESS_LENGTH = PREFIX.length + BODY_CHARS + SUFFIX.length;
 const CHECKSUM_BITS = 29;
 const ALPHABET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 
-const LEGACY_HEX_CHAIN_IDS = new Set([3, 4, 1337]);
+const LEGACY_HEX_CHAIN_IDS = new Set([3, 1337]);
 
 function keyToBigInt(publicKey: Uint8Array): bigint {
   let n = 0n;

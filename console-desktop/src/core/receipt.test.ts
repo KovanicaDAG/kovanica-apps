@@ -21,10 +21,10 @@ describe("execution receipts", () => {
     expect(decodeLogs([{ topics: ["vault_create"], blockNumber: "4", transactionHash: "aa" }])[0]?.topics[0]).toBe("vault_create");
   });
 
-  it("fails closed when Chain 5 does not answer", async () => {
+  it("fails closed when testnet does not answer", async () => {
     const extra = (globalThis as { process?: { env?: { KOVANICA_CHAIN5_RPC?: string } } }).process?.env?.KOVANICA_CHAIN5_RPC;
     const probe = await probeChain5(extra, 2000);
-    if (!probe.reachable || probe.chainId !== 5) {
+    if (!probe.reachable || probe.chainId !== 2) {
       expect(probe.error).toBeTruthy();
       return;
     }

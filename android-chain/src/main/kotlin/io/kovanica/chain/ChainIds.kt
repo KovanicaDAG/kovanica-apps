@@ -19,9 +19,9 @@ object ChainIds {
     /** No chain was configured. Legacy hex stays refused. */
     const val UNSPECIFIED: Long = -1
 
-    /** Devnet 3, chain 4 (internal), local 1337. Same set as Rust `legacy_address_allowed`. */
+    /** Devnet 3, local 1337. Same set as Rust `legacy_address_allowed`. */
     fun legacyAllowed(chainId: Long): Boolean =
-        chainId == DEVNET || chainId == CHAIN_4 || chainId == LOCAL
+        chainId == DEVNET || chainId == LOCAL
 
     /**
      * Chain id for signing and address checks.

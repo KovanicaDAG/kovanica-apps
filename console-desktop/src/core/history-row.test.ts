@@ -10,8 +10,9 @@ describe("contract history rows", () => {
     expect(receiptStatusLine("0x1", "success", null)).toBe("0x1 Success");
     expect(callNeed("vault_create", "10", "5", "100")).toBe(115n);
     expect(shortfall(20n, 115n)).toBe(95n);
-    expect(faucetQuick(5)).toBe(true);
+    expect(faucetQuick(2)).toBe(true);
     expect(faucetQuick(1337)).toBe(true);
     expect(faucetQuick(3)).toBe(false);
+    expect(faucetQuick(5)).toBe(false);
   });
 });

@@ -204,9 +204,9 @@ export const FAUCET_ATOMS = "100000000000";
 /** Local cooldown between testnet faucet claims. */
 export const FAUCET_COOLDOWN_MS = 60_000;
 
-/** Chain 5, devnet 3, and local 1337. Mainnet and chain 4 are not included. */
+/** Chain 2, devnet 3, and local 1337. Mainnet and chain 4 are not included. */
 export function faucetChainAllowed(chainId: string | null): boolean {
-  return chainId === "3" || chainId === "5" || chainId === "1337";
+  return chainId === "2" || chainId === "3" || chainId === "1337";
 }
 
 /** 1-based positions. 24-word phrases use 3, 8, and 14. */
