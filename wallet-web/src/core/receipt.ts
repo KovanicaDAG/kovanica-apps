@@ -187,3 +187,27 @@ function stripHex(value: string): string | null {
   const clean = value.replace(/^0x/i, "");
   return clean || null;
 }
+
+export async function estimateGas(
+  rpcUrl: string,
+  call: { from?: string; to?: string; value?: string | number; data?: string; entry?: string }
+): Promise<bigint> {
+  try {
+    const result = await postRpc(rpcUrl, "kovanica_estimateGas", [call]);
+    if (typeof result === "string" && result.startsWith("0x")) {
+      return BigInt(result);
+    }
+    if (typeof result === "number") return BigInt(result);
+  } catch {
+    // fallback
+  }
+  return 21000n;
+}
+
+export async function simulateCall(
+  rpcUrl: string,
+  call: { from?: string; to?: string; value?: string | number; data?: string; entry?: string }
+): Promise<string> {
+  const result = await postRpc(rpcUrl, "kovanica_call", [call]);
+  return typeof result === "string" ? result : "0x";
+}

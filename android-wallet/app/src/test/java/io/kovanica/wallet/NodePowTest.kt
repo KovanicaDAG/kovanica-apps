@@ -38,4 +38,25 @@ class NodePowTest {
         assertTrue(path.endsWith("mobile_node.redb"))
         assertTrue(path.startsWith(filesDir.absolutePath))
     }
+
+    @Test
+    fun node_store_tip_round_defaults_to_zero_on_missing_db() {
+        val filesDir = java.io.File("/tmp/kovanica-nonexistent-" + System.currentTimeMillis())
+        val context = object : android.content.ContextWrapper(null) {
+            override fun getFilesDir(): java.io.File = filesDir
+        }
+        assertEquals(0L, NodeStore.tipRound(context))
+    }
+
+    @Test
+    fun finds_a_pow_header_from_block_with_decoded_fields() {
+        val block = JSONObject(
+            """
+            {"author":0,"number":"0xa","round":"0xa","chain_id":5,"target_bits":"0x217fffff","parents":[]}
+            """.trimIndent(),
+        )
+        val header = NodePow.findHeader(block)
+        assertTrue(header != null)
+        assertEquals(5, header?.optInt("chain_id"))
+    }
 }

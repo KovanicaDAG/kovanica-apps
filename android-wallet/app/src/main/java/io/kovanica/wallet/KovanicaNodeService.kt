@@ -140,27 +140,37 @@ class KovanicaNodeService : Service() {
             schedule()
             return
         }
-        val client = NodeClient(NetworkPrefs.rpc(this))
+        val rpcUrl = NetworkPrefs.rpc(this)
+        val client = NodeClient(rpcUrl)
         val withPeers = base.copy(peerLine = "peers: ${readPeerCount(client)} / ${profile.maxPeers} max")
         if (chainId != HYBRID_CHAIN) {
             NodeRuntime.publish(this, withPeers.copy(note = "PoW header checks run on chain 5. This profile is chain $chainId."))
             schedule()
             return
         }
+        val p2pResult = runCatching {
+            uniffi.kovanica_light.syncMobileNodePeer(NodeStore.localDbPath(this), rpcUrl, chainId, 32uL)
+        }.getOrNull()
         try {
             val dag = client.call("kovanica_getDagInfo", JSONArray())
             var header = NodePow.findHeader(dag)
             if (header == null) {
                 val round = (dag as? JSONObject)?.optLong("tipRound", -1L) ?: -1L
                 if (round >= 0) {
-                    header = NodePow.findHeader(client.call("kovanica_getBlockByRound", JSONArray().put(round)))
+                    header = NodePow.findHeader(client.call("kovanica_getBlockHeaderByNumber", JSONArray().put(round)))
+                        ?: NodePow.findHeader(client.call("kovanica_getBlockByRound", JSONArray().put(round)))
                 }
             }
             if (header == null) {
                 header = NodePow.findHeader(client.call("kovanica_getLeaderHeader", JSONArray()))
             }
             if (header == null) {
-                NodeRuntime.publish(this, withPeers.copy(note = "The node did not return a PoW header."))
+                val noteMsg = if (p2pResult != null && p2pResult.syncedBlocks > 0uL) {
+                    "P2P synced ${p2pResult.syncedBlocks} blocks (tip: ${p2pResult.newTipRound})."
+                } else {
+                    "The node did not return a PoW header."
+                }
+                NodeRuntime.publish(this, withPeers.copy(note = noteMsg))
                 schedule()
                 return
             }
@@ -179,6 +189,11 @@ class KovanicaNodeService : Service() {
             val remembered = NodeStore.save(this, verified.round.toLong(), header.toString())
             val interval = AirgapReview.intervalLabel(NodeStore.recentTimestamps(this), profile.targetBlockMs.toLong())
             val tone = AirgapReview.intervalTone(NodeStore.recentTimestamps(this), profile.targetBlockMs.toLong())
+            val syncNote = if (p2pResult != null && p2pResult.syncedBlocks > 0uL) {
+                "P2P synced ${p2pResult.syncedBlocks} blocks (tip: ${p2pResult.newTipRound}). Verified on phone."
+            } else {
+                "Verified on this phone."
+            }
             NodeRuntime.publish(
                 this,
                 withPeers.copy(
@@ -187,7 +202,7 @@ class KovanicaNodeService : Service() {
                     work = verified.work,
                     cumulative = cumulative,
                     targetBits = header.opt("target_bits")?.toString() ?: header.opt("targetBits")?.toString() ?: "—",
-                    note = "Verified on this phone.",
+                    note = syncNote,
                     headerCount = remembered.toString(),
                     storeBytes = NodeStore.databaseBytes(this).toString(),
                     intervalLine = interval,
@@ -318,6 +333,13 @@ object NodeStore {
         val dir = File(context.filesDir, "headers")
         if (!dir.isDirectory) return 0
         return dir.listFiles()?.count { roundOf(it) != null } ?: 0
+    }
+
+    fun tipRound(context: Context): Long {
+        val stats = runCatching {
+            uniffi.kovanica_light.getLocalStorageStats(localDbPath(context))
+        }.getOrNull()
+        return stats?.tipRound?.toLong() ?: 0L
     }
 
     fun save(context: Context, round: Long, headerJson: String): Int {

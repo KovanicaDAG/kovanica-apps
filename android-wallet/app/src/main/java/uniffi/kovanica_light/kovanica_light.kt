@@ -674,6 +674,8 @@ internal object IntegrityCheckingUniffiLib {
     }
     external fun uniffi_kovanica_light_ffi_checksum_func_change_passphrase_raw(
     ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_check_p2p_peer_status(
+    ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_comms_open_envelope(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_comms_seal_envelope(
@@ -734,6 +736,10 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_store_verified_block_header(
     ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_sync_block_headers_batch(
+    ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_sync_mobile_node_peer(
+    ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_verify_header(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_verify_pow_header_chain_json(
@@ -758,6 +764,8 @@ internal object UniffiLib {
         
     }
     external fun uniffi_kovanica_light_ffi_fn_func_change_passphrase_raw(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`newPassphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_check_p2p_peer_status(`peerEndpoint`: RustBuffer.ByValue,`chainId`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_comms_open_envelope(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`envelopeJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -819,6 +827,10 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_store_verified_block_header(`dbPath`: RustBuffer.ByValue,`headerJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_kovanica_light_ffi_fn_func_sync_block_headers_batch(`dbPath`: RustBuffer.ByValue,`headersJson`: RustBuffer.ByValue,`expectedChainId`: Long,`nowMs`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_sync_mobile_node_peer(`dbPath`: RustBuffer.ByValue,`peerEndpoint`: RustBuffer.ByValue,`chainId`: Long,`maxBlocks`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_verify_header(`chainId`: Long,`epoch`: Long,`committeeJson`: RustBuffer.ByValue,`headerJson`: RustBuffer.ByValue,`sealsJson`: RustBuffer.ByValue,`parentJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_verify_pow_header_chain_json(`expectedChainId`: Long,`headersJson`: RustBuffer.ByValue,`nowMs`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -951,6 +963,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_kovanica_light_ffi_checksum_func_change_passphrase_raw() != 16537) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_check_p2p_peer_status() != 41282) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_comms_open_envelope() != 21852) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1039,6 +1054,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_store_verified_block_header() != 55102) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_sync_block_headers_batch() != 27816) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_sync_mobile_node_peer() != 59776) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_verify_header() != 48525) {
@@ -1360,6 +1381,57 @@ public object FfiConverterTypeAccountSnapshot: FfiConverterRustBuffer<AccountSna
 
 
 /**
+ * Summary result of a batch header synchronization and verification operation.
+ */
+data class BatchSyncResult (
+    var `syncedCount`: kotlin.ULong
+    , 
+    var `highestRound`: kotlin.ULong
+    , 
+    var `totalWork`: kotlin.String
+    , 
+    var `rejectedCount`: kotlin.ULong
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeBatchSyncResult: FfiConverterRustBuffer<BatchSyncResult> {
+    override fun read(buf: ByteBuffer): BatchSyncResult {
+        return BatchSyncResult(
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: BatchSyncResult) = (
+            FfiConverterULong.allocationSize(value.`syncedCount`) +
+            FfiConverterULong.allocationSize(value.`highestRound`) +
+            FfiConverterString.allocationSize(value.`totalWork`) +
+            FfiConverterULong.allocationSize(value.`rejectedCount`)
+    )
+
+    override fun write(value: BatchSyncResult, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`syncedCount`, buf)
+            FfiConverterULong.write(value.`highestRound`, buf)
+            FfiConverterString.write(value.`totalWork`, buf)
+            FfiConverterULong.write(value.`rejectedCount`, buf)
+    }
+}
+
+
+
+/**
  * A new wallet. The mnemonic is shown once by the caller.
  */
 data class CreatedWallet (
@@ -1660,6 +1732,113 @@ public object FfiConverterTypeMobileNodeProfile: FfiConverterRustBuffer<MobileNo
             FfiConverterUShort.write(value.`maxPeers`, buf)
             FfiConverterBoolean.write(value.`wifiAndChargingOnly`, buf)
             FfiConverterString.write(value.`localRpcBind`, buf)
+    }
+}
+
+
+
+/**
+ * Query peer connection status and advertised tip round.
+ */
+data class P2pPeerStatus (
+    var `peerAddress`: kotlin.String
+    , 
+    var `isConnected`: kotlin.Boolean
+    , 
+    var `tipRound`: kotlin.ULong
+    , 
+    var `chainId`: kotlin.ULong
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeP2pPeerStatus: FfiConverterRustBuffer<P2pPeerStatus> {
+    override fun read(buf: ByteBuffer): P2pPeerStatus {
+        return P2pPeerStatus(
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: P2pPeerStatus) = (
+            FfiConverterString.allocationSize(value.`peerAddress`) +
+            FfiConverterBoolean.allocationSize(value.`isConnected`) +
+            FfiConverterULong.allocationSize(value.`tipRound`) +
+            FfiConverterULong.allocationSize(value.`chainId`)
+    )
+
+    override fun write(value: P2pPeerStatus, buf: ByteBuffer) {
+            FfiConverterString.write(value.`peerAddress`, buf)
+            FfiConverterBoolean.write(value.`isConnected`, buf)
+            FfiConverterULong.write(value.`tipRound`, buf)
+            FfiConverterULong.write(value.`chainId`, buf)
+    }
+}
+
+
+
+/**
+ * Result of syncing directly with a network peer.
+ */
+data class P2pSyncResult (
+    var `success`: kotlin.Boolean
+    , 
+    var `syncedBlocks`: kotlin.ULong
+    , 
+    var `newTipRound`: kotlin.ULong
+    , 
+    var `peer`: kotlin.String
+    , 
+    var `error`: kotlin.String?
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeP2pSyncResult: FfiConverterRustBuffer<P2pSyncResult> {
+    override fun read(buf: ByteBuffer): P2pSyncResult {
+        return P2pSyncResult(
+            FfiConverterBoolean.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: P2pSyncResult) = (
+            FfiConverterBoolean.allocationSize(value.`success`) +
+            FfiConverterULong.allocationSize(value.`syncedBlocks`) +
+            FfiConverterULong.allocationSize(value.`newTipRound`) +
+            FfiConverterString.allocationSize(value.`peer`) +
+            FfiConverterOptionalString.allocationSize(value.`error`)
+    )
+
+    override fun write(value: P2pSyncResult, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`success`, buf)
+            FfiConverterULong.write(value.`syncedBlocks`, buf)
+            FfiConverterULong.write(value.`newTipRound`, buf)
+            FfiConverterString.write(value.`peer`, buf)
+            FfiConverterOptionalString.write(value.`error`, buf)
     }
 }
 
@@ -2009,6 +2188,22 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         FfiConverterString.lower(`keystoreJson`),
         FfiConverterString.lower(`passphrase`),
         FfiConverterString.lower(`newPassphrase`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Query peer connection status and advertised tip round.
+         */
+    @Throws(LightFfiException::class) fun `checkP2pPeerStatus`(`peerEndpoint`: kotlin.String, `chainId`: kotlin.ULong): P2pPeerStatus {
+            return FfiConverterTypeP2pPeerStatus.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_check_p2p_peer_status(
+    
+        
+        FfiConverterString.lower(`peerEndpoint`),
+        FfiConverterULong.lower(`chainId`),_status)
 }
     )
     }
@@ -2594,6 +2789,44 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         
         FfiConverterString.lower(`dbPath`),
         FfiConverterString.lower(`headerJson`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Verify a batch of block headers (PoW + linkage + timestamp) and atomically ingest
+         * them into the local embedded storage.
+         */
+    @Throws(LightFfiException::class) fun `syncBlockHeadersBatch`(`dbPath`: kotlin.String, `headersJson`: kotlin.String, `expectedChainId`: kotlin.ULong, `nowMs`: kotlin.ULong?): BatchSyncResult {
+            return FfiConverterTypeBatchSyncResult.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_sync_block_headers_batch(
+    
+        
+        FfiConverterString.lower(`dbPath`),
+        FfiConverterString.lower(`headersJson`),
+        FfiConverterULong.lower(`expectedChainId`),
+        FfiConverterOptionalULong.lower(`nowMs`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Connect to a seed/peer node, query remote DAG tip, fetch missing blocks,
+         * verify them, and ingest into local embedded RedB storage.
+         */
+    @Throws(LightFfiException::class) fun `syncMobileNodePeer`(`dbPath`: kotlin.String, `peerEndpoint`: kotlin.String, `chainId`: kotlin.ULong, `maxBlocks`: kotlin.ULong): P2pSyncResult {
+            return FfiConverterTypeP2pSyncResult.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_sync_mobile_node_peer(
+    
+        
+        FfiConverterString.lower(`dbPath`),
+        FfiConverterString.lower(`peerEndpoint`),
+        FfiConverterULong.lower(`chainId`),
+        FfiConverterULong.lower(`maxBlocks`),_status)
 }
     )
     }
