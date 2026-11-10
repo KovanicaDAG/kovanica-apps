@@ -188,7 +188,7 @@ object ContractCalls {
 
     fun warning(chainId: Long): String? {
         if (chainId == ChainIds.HYBRID || chainId == ChainIds.LOCAL) return null
-        return "Warning: chain $chainId is not Hybrid PoW Testnet (5) or local (1337)."
+        return "Warning: chain $chainId is not Hybrid PoW Testnet (2) or local (1337)."
     }
 
     fun decodeReceipt(value: Any?): ReceiptView {

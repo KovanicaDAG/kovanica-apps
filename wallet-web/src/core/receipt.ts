@@ -117,8 +117,8 @@ export async function probeChain5(extra?: string, timeoutMs = 2500): Promise<Liv
         continue;
       }
       const chainId = chainIdOf(body.result);
-      if (chainId !== 5) {
-        return { url, reachable: true, chainId, error: chainId == null ? "no chain id" : `node reported chain ${chainId}, not 5` };
+      if (chainId !== 2 && chainId !== 5) {
+        return { url, reachable: true, chainId, error: chainId == null ? "no chain id" : `node reported chain ${chainId}, not 2` };
       }
       return { url, reachable: true, chainId, error: null };
     } catch (error) {

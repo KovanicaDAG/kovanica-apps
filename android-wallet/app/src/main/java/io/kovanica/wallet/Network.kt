@@ -43,16 +43,13 @@ object Networks {
         soon = "Frozen. Read-only.",
     )
     val TESTNET: Network = Network(
-        "testnet", "Testnet (chain 4)", ChainIds.TESTNET,
+        "testnet", "Testnet (Chain 2)", ChainIds.TESTNET,
         "https://rpc-testnet.kovanica.online/rpc",
-        // The faucet answers `POST {"address": …}` on seed3 today;
-        // `faucet-testnet.kovanica.online` has no DNS record, so the Request
-        // faucet button would always fail on a fresh install.
         "https://seed3.kovanica.online/faucet", enabled = true,
     )
     val HYBRID: Network = Network(
-        "hybrid", "Chain 5 · Hybrid PoW Testnet", ChainIds.HYBRID,
-        "http://10.0.2.2:8545/rpc", null, enabled = true,
+        "hybrid", "Chain 2 · Hybrid PoW Testnet", ChainIds.HYBRID,
+        "http://10.0.2.2:8545/rpc", "http://10.0.2.2:3000/faucet", enabled = true,
     )
     val LOCAL: Network = Network(
         "local", "Local", ChainIds.LOCAL,

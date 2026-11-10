@@ -95,7 +95,7 @@ class ContractCallsTest {
             ContractCalls.Draft(
                 family = "multisig",
                 action = "multisig_confirm",
-                chainId = ChainIds.TESTNET,
+                chainId = ChainIds.DEVNET,
                 recordId = "cd".repeat(32),
                 proposalId = "7",
             ),

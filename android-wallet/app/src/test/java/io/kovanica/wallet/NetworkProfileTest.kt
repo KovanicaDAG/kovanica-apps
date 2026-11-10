@@ -6,11 +6,11 @@ import org.junit.Test
 
 class NetworkProfileTest {
     @Test
-    fun testnetProfileUsesChain4() {
-        assertEquals(4L, Networks.TESTNET.chainId)
+    fun testnetProfileUsesChain2() {
+        assertEquals(2L, Networks.TESTNET.chainId)
         assertEquals("testnet", Networks.TESTNET.id)
         assertTrue(Networks.TESTNET.enabled)
-        assertEquals("Testnet (chain 4)", Networks.TESTNET.label)
+        assertEquals("Testnet (Chain 2)", Networks.TESTNET.label)
     }
 
     @Test
@@ -21,6 +21,7 @@ class NetworkProfileTest {
     @Test
     fun otherProfilesKeepTheirChainIds() {
         assertEquals(1L, Networks.MAINNET.chainId)
+        assertEquals(2L, Networks.HYBRID.chainId)
         assertEquals(1337L, Networks.LOCAL.chainId)
     }
 
