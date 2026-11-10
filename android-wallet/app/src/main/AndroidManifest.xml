@@ -57,6 +57,11 @@
             android:exported="false"
             android:label="Air-gap sign"
             android:configChanges="orientation|screenSize|keyboardHidden" />
+        <activity
+            android:name=".ContractCallActivity"
+            android:exported="false"
+            android:label="Contract call"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
         <service
             android:name=".KovanicaNodeService"
             android:exported="false"

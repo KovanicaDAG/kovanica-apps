@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { checkAddress, decodeRecipient } from "./core/address";
 import { acceptSigned } from "./core/airgap";
 import { bytesToHex, equalBytes, hexToBytes } from "./core/bytes";
+import { decodeReceipt, formatReceipt } from "./core/receipt";
 import {
   buildContractCall,
   decodeTokenState,
@@ -121,6 +122,7 @@ export function mountContracts(shownChainId: () => string | null): void {
   const signed = required<HTMLTextAreaElement>("contract-signed");
   const importButton = required<HTMLButtonElement>("contract-import");
   const status = required<HTMLParagraphElement>("contract-status");
+  const receipt = required<HTMLParagraphElement>("contract-receipt");
   const fields: Record<string, HTMLElement> = {
     owner: required<HTMLElement>("field-owner"),
     recipient: required<HTMLElement>("field-recipient"),
@@ -221,6 +223,27 @@ export function mountContracts(shownChainId: () => string | null): void {
   async function broadcast(raw: string): Promise<void> {
     const hash = await invoke<string>("wallet_broadcast_raw", { raw });
     status.textContent = `Transaction broadcast successful! TxHash: ${hash}`;
+    await watchReceipt(hash);
+  }
+
+  async function watchReceipt(hash: string): Promise<void> {
+    receipt.hidden = false;
+    receipt.textContent = `status Pending\ntx ${hash.replace(/^0x/, "")}`;
+    let left = 6;
+    while (left > 0) {
+      left -= 1;
+      try {
+        const raw = await invoke<string>("wallet_tx_receipt", { hash });
+        const view = decodeReceipt(JSON.parse(raw) as unknown);
+        if (!view.hash) view.hash = hash.replace(/^0x/, "");
+        receipt.textContent = formatReceipt(view);
+        if (view.status !== "pending") return;
+      } catch (error) {
+        receipt.textContent = messageFrom(error);
+        return;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 5_000));
+    }
   }
 
   kind.addEventListener("change", () => {

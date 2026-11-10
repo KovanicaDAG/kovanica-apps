@@ -123,6 +123,7 @@ data class HistoryEntry(
         const val KIND_EXIT: String = "exit"
         const val KIND_FAUCET: String = "faucet"
         const val KIND_TOKEN_CREATE: String = "token_create"
+        const val KIND_CONTRACT: String = "contract"
 
         /** Parse one stored object; `null` when the required fields are missing. */
         fun fromJson(obj: JSONObject): HistoryEntry? {

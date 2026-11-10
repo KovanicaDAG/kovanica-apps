@@ -14,6 +14,10 @@ export type ActivityRow = {
   createdAt: number;
   height: number | null;
   note: string;
+  gasUsed?: string | null;
+  code?: string | null;
+  error?: string | null;
+  logs?: number | null;
 };
 
 const KEY = "kvnc.activity.v1";
@@ -33,7 +37,7 @@ type ActivityState = {
   indexerNote: string;
   hydrate: () => void;
   push: (row: ActivityRow) => void;
-  mark: (hash: string, status: TxStatus, height: number | null) => void;
+  mark: (hash: string, status: TxStatus, height: number | null, extra?: { gasUsed?: string | null; code?: string | null; error?: string | null; logs?: number | null }) => void;
   mergeIncoming: (rows: ActivityRow[]) => void;
   setIndexerNote: (indexerNote: string) => void;
 };
@@ -51,8 +55,8 @@ export const useActivity = create<ActivityState>((set, get) => ({
     save(rows);
     set({ rows });
   },
-  mark: (hash, status, height) => {
-    const rows = get().rows.map((row) => (row.hash === hash ? { ...row, status, height } : row));
+  mark: (hash, status, height, extra) => {
+    const rows = get().rows.map((row) => (row.hash === hash ? { ...row, status, height, ...extra } : row));
     save(rows);
     set({ rows });
   },
