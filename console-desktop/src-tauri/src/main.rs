@@ -660,6 +660,26 @@ async fn wallet_broadcast_raw(app: tauri::AppHandle, raw: String) -> Result<Stri
     .map_err(|_| "The broadcast was interrupted.".to_string())?
 }
 
+/// Raw `kovanica_getTransactionReceipt` JSON. `null` means the node has no receipt yet.
+#[tauri::command]
+async fn wallet_tx_receipt(app: tauri::AppHandle, hash: String) -> Result<String, String> {
+    let trimmed = hash.trim();
+    if trimmed.is_empty() || trimmed.len() > 80 {
+        return Err("Enter a transaction hash.".to_string());
+    }
+    let url = current_url(&app)?;
+    let hash = trimmed.to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let rpc = HttpRpc::new(url).map_err(|err| err.to_string())?;
+        let value = rpc
+            .call("kovanica_getTransactionReceipt", serde_json::json!([hash]))
+            .map_err(|err| err.to_string())?;
+        Ok(value.to_string())
+    })
+    .await
+    .map_err(|_| "The receipt request was interrupted.".to_string())?
+}
+
 /// Read one contract storage slot. The slot is a 32-byte hex key.
 #[tauri::command]
 async fn wallet_storage_at(
@@ -765,6 +785,7 @@ fn main() {
             wallet_export_backup,
             wallet_call_quote,
             wallet_broadcast_raw,
+            wallet_tx_receipt,
             wallet_storage_at
         ])
         .run(tauri::generate_context!())

@@ -141,7 +141,14 @@ export function WalletApp() {
       await Promise.all(
         pending.map(async (row) => {
           const result = await receipt(rpcUrl, row.hash);
-          if (!stop && result && result.status !== "pending") useActivity.getState().mark(row.hash, result.status, result.height);
+          if (!stop && result && result.status !== "pending") {
+            useActivity.getState().mark(row.hash, result.status, result.height, {
+              gasUsed: result.gasUsed,
+              code: result.code,
+              error: result.error,
+              logs: result.logs,
+            });
+          }
         }),
       );
     };

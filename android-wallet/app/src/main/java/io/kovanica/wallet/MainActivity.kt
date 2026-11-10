@@ -1290,6 +1290,10 @@ class MainActivity : Activity() {
         startActivity(Intent(this, CreateTokenActivity::class.java))
     }
 
+    private fun openContracts() {
+        startActivity(Intent(this, ContractCallActivity::class.java))
+    }
+
     /**
      * The classic result contract: this app carries no androidx, so the contacts
      * picker and the QR scanner both hand their address back here.
@@ -1336,6 +1340,7 @@ class MainActivity : Activity() {
     private fun tokensCard(): LinearLayout = card().apply {
         addStack(tokensHeader())
         addStack(button("Create token", filled = false) { openCreateToken() }, 10)
+        addStack(button("Contracts", filled = false) { openContracts() }, 8)
         tokensState = TextView(this@MainActivity).apply {
             textSize = 12f
             setTextColor(MUTED)

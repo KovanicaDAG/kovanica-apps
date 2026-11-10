@@ -1,4 +1,5 @@
 import { storageBytes } from "@/core/contracts";
+import { decodeReceipt } from "@/core/receipt";
 import { proxyHealth, proxyIndexer, proxyRpc } from "./rpc.functions";
 
 export type SyncProbe = {
@@ -142,7 +143,16 @@ export async function broadcast(rpcUrl: string, rawHex: string): Promise<string>
   throw new Error(last);
 }
 
-export async function receipt(rpcUrl: string, hash: string): Promise<{ status: "pending" | "confirmed" | "failed"; height: number | null } | null> {
+export type ReceiptView = {
+  status: "pending" | "confirmed" | "failed";
+  height: number | null;
+  gasUsed: string | null;
+  code: "0x1" | "0x0" | null;
+  error: string | null;
+  logs: number;
+};
+
+export async function receipt(rpcUrl: string, hash: string): Promise<ReceiptView | null> {
   const fromReceipt = await receiptOnce(rpcUrl, hash, "kovanica_getTransactionReceipt");
   if (fromReceipt && fromReceipt.status !== "pending") return fromReceipt;
   const fromTx = await receiptOnce(rpcUrl, hash, "kovanica_getTransaction");
@@ -153,18 +163,21 @@ async function receiptOnce(
   rpcUrl: string,
   hash: string,
   method: "kovanica_getTransactionReceipt" | "kovanica_getTransaction",
-): Promise<{ status: "pending" | "confirmed" | "failed"; height: number | null } | null> {
+): Promise<ReceiptView | null> {
   for (const candidate of withRpcPath(rpcUrl)) {
     try {
       const result = await post(candidate, method, [hash]);
-      if (result == null) return { status: "pending", height: null };
-      const record = asRecord(result) ?? {};
-      const statusText = String(record.status ?? record.outcome ?? "").toLowerCase();
-      const height = pickNumber(record, ["blockHeight", "block_height", "height", "committedHeight", "round"]);
-      if (statusText.includes("fail") || record.success === false) return { status: "failed", height };
-      if (statusText.includes("pend")) return { status: "pending", height };
-      if (method === "kovanica_getTransaction" && height == null) return { status: "pending", height };
-      return { status: "confirmed", height };
+      const view = decodeReceipt(result);
+      const height = view.height == null ? null : Number(view.height);
+      const pending = view.status === "pending" || (method === "kovanica_getTransaction" && view.height == null && view.status !== "revert");
+      return {
+        status: view.status === "revert" ? "failed" : pending ? "pending" : "confirmed",
+        height: height != null && Number.isSafeInteger(height) ? height : null,
+        gasUsed: view.gasUsed,
+        code: view.status === "revert" ? "0x0" : pending ? null : "0x1",
+        error: view.error,
+        logs: view.logs.length,
+      };
     } catch {
       continue;
     }

@@ -17,6 +17,7 @@ import { presetById } from "@/lib/networks";
 import { buildCallPreview } from "@/services/wallet";
 import { readStorageAt } from "@/services/rpc";
 import { signingLock, useNetwork } from "@/stores/network";
+import { useActivity } from "@/stores/activity";
 
 const ACTIONS = {
   token: [
@@ -278,7 +279,27 @@ export function Contracts({
       <button type="submit" className="min-h-12 rounded-full bg-copper font-medium text-copper-ink disabled:opacity-40" disabled={current.sign ? lock.locked : reading}>
         {current.sign ? "Review call" : reading ? "Reading…" : "Read"}
       </button>
+      <ReceiptCard />
     </form>
+  );
+}
+
+function ReceiptCard() {
+  const row = useActivity((state) => state.rows.find((item) => item.direction === "contract"));
+  const code = row?.code ?? (row?.status === "confirmed" ? "0x1" : row?.status === "failed" ? "0x0" : null);
+  const label = !row ? "No contract receipt yet." : row.status === "confirmed" ? `status ${code ?? "0x1"} Success` : row.status === "failed" ? `status ${code ?? "0x0"} Revert` : "status Pending";
+  return (
+    <section className="rounded-3xl border border-line bg-ink px-4 py-3 text-sm">
+      <h3 className="font-medium text-paper">Recent execution receipt</h3>
+      <p className="mt-2 whitespace-pre-wrap break-all text-muted">
+        {label}
+        {row?.gasUsed ? `\ngasUsed ${row.gasUsed}` : ""}
+        {row?.height != null ? `\nblock ${row.height}` : ""}
+        {row?.hash ? `\ntx ${row.hash}` : ""}
+        {row?.error ? `\n${row.error}` : ""}
+        {row?.logs ? `\nlogs ${row.logs}` : ""}
+      </p>
+    </section>
   );
 }
 

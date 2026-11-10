@@ -212,6 +212,7 @@ class HistoryActivity : Activity() {
         HistoryEntry.KIND_EXIT -> "EXIT"
         HistoryEntry.KIND_FAUCET -> "FAUCET"
         HistoryEntry.KIND_TOKEN_CREATE -> "TOKEN NEW"
+        HistoryEntry.KIND_CONTRACT -> "CALL"
         else -> kind.uppercase()
     }
 
