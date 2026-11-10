@@ -44,8 +44,8 @@ jobs:
       - name: Verify test vectors
         run: npx tsx src/core/check-vectors.ts
 
-      - name: Verify receipt decoding
-        run: node --experimental-strip-types --test src/core/receipt.test.ts
+      - name: Verify receipt decoding & history rows
+        run: node --experimental-strip-types --test src/core/receipt.test.ts src/core/history-row.test.ts
 
       - name: Build web wallet
         run: npm run build
