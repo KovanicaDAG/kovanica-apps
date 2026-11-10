@@ -81,6 +81,12 @@ object AirgapReview {
         return "Recent block interval: $whole.${frac}s (target $target)"
     }
 
+    fun intervalTone(timestamps: List<Long>, targetMs: Long): String {
+        val median = medianIntervalMs(timestamps) ?: return "idle"
+        val delta = kotlin.math.abs(median - targetMs)
+        return if (delta <= 500L) "ok" else "drift"
+    }
+
     private fun argsSummary(args: String): String {
         val trimmed = args.trim()
         if (trimmed.isEmpty()) return "none"

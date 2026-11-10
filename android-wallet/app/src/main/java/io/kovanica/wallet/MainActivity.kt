@@ -19,6 +19,9 @@ import android.os.Build
 import android.os.Bundle
 import android.text.Editable
 import android.text.InputType
+import android.text.Spannable
+import android.text.SpannableString
+import android.text.style.ForegroundColorSpan
 import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
@@ -32,6 +35,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
+import android.widget.Toast
 import io.kovanica.chain.ChainIds
 import org.json.JSONArray
 import org.json.JSONObject
@@ -76,6 +80,7 @@ class MainActivity : Activity() {
     private lateinit var nodePhase: TextView
     private lateinit var nodeMeta: TextView
     private lateinit var wifiToggle: Button
+    private lateinit var fallbackButton: Button
     private var stopNodeListen: () -> Unit = {}
     private val nodeUpdates = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -249,6 +254,9 @@ class MainActivity : Activity() {
             chainMeta = monoValue("").apply { setTextColor(MUTED) }
             addStack(chainMeta, 8)
             addStack(button("Check connection") { checkConnection() }, 14)
+            fallbackButton = button("Use rpc-testnet.kovanica.online", filled = false) { applyNetwork(Networks.TESTNET) }
+            fallbackButton.visibility = View.GONE
+            addStack(fallbackButton, 8)
             addStack(button("Sync sealed header", filled = false) { sync() }, 10)
             addStack(button("Verified balance", filled = false) { balance() }, 10)
             addStack(
@@ -784,6 +792,13 @@ class MainActivity : Activity() {
                 setChainState(line.text.lineSequence().first(), line.tone)
                 chainMeta.text = line.text.lineSequence().drop(1).joinToString("\n").trim()
                     .ifEmpty { chainPreview() }
+                if (::fallbackButton.isInitialized) {
+                    val failed = line.tone == Tone.ERROR
+                    fallbackButton.visibility = if (failed) View.VISIBLE else View.GONE
+                    if (failed) {
+                        Toast.makeText(this, "The node did not respond. Switch to the testnet fallback or edit the host and port.", Toast.LENGTH_LONG).show()
+                    }
+                }
             },
         )
     }
@@ -1850,6 +1865,7 @@ class MainActivity : Activity() {
     private fun toggleWifiOnly() {
         NodePrefs.setWifiAndChargingOnly(this, !NodePrefs.wifiAndChargingOnly(this))
         if (::wifiToggle.isInitialized) wifiToggle.text = wifiLabel()
+        if (NodeRuntime.snapshot.phase != NodeRuntime.PHASE_STOPPED) verifyNow()
     }
 
     private fun stopNode() {
@@ -1859,7 +1875,11 @@ class MainActivity : Activity() {
     private fun renderNode(snapshot: NodeRuntime.Snapshot) {
         if (!::nodePhase.isInitialized) return
         nodePhase.text = snapshot.phase
-        nodeMeta.text = "round ${snapshot.round}  ·  work ${snapshot.work}\n" +
+        val interval = when (snapshot.intervalTone) {
+            "ok", "drift" -> "● ${snapshot.intervalLine}"
+            else -> snapshot.intervalLine
+        }
+        val body = "round ${snapshot.round}  ·  work ${snapshot.work}\n" +
             "cumulative ${snapshot.cumulative}\n" +
             "target_bits ${snapshot.targetBits}\n" +
             "pow ${snapshot.powHash}\n" +
@@ -1870,8 +1890,15 @@ class MainActivity : Activity() {
             "Verified headers in window: ${snapshot.headerCount}\n" +
             "Local DB: ${dbLabel(snapshot.storeBytes, snapshot.cacheMb)}\n" +
             "${snapshot.peerLine}\n" +
-            "${snapshot.intervalLine}\n" +
+            interval + "\n" +
             snapshot.note
+        val span = SpannableString(body)
+        val at = body.indexOf(interval)
+        if (at >= 0 && (snapshot.intervalTone == "ok" || snapshot.intervalTone == "drift")) {
+            val color = if (snapshot.intervalTone == "ok") 0xFF7D9A78.toInt() else 0xFFE0B15A.toInt()
+            span.setSpan(ForegroundColorSpan(color), at, at + 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        nodeMeta.text = span
     }
 
     private fun dbLabel(bytes: String, limitMb: String): String {
@@ -2256,10 +2283,10 @@ class MainActivity : Activity() {
     }
 
     private fun styleNetworkItem(view: TextView, network: Network, dropdown: Boolean) {
-        view.text = if (network.enabled) {
-            "${network.label} · chain ${network.chainId}"
-        } else {
-            "${network.label} — ${network.soon ?: "not open yet"}"
+        view.text = when {
+            !network.enabled -> "${network.label} — ${network.soon ?: "not open yet"}"
+            network.id == "hybrid" -> "Recommended · ${network.label} · chain ${network.chainId}"
+            else -> "${network.label} · chain ${network.chainId}"
         }
         view.setTextColor(if (network.enabled) TEXT else MUTED)
         view.textSize = 15f

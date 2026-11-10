@@ -37,7 +37,7 @@ export function Watchlist({ onSend, onContract }: { onSend: (address: string) =>
     setBusy(item.id);
     setError(null);
     try {
-      const result = await readContract(presetById(net.presetId).rpcUrl, item.address, READS[item.kind], account?.publicKey ?? "");
+      const result = await readContract(net.rpcUrl, item.address, READS[item.kind], account?.publicKey ?? "");
       setReads((current) => ({ ...current, [item.id]: result }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not read the contract");
@@ -121,7 +121,7 @@ export function Watchlist({ onSend, onContract }: { onSend: (address: string) =>
             if (!net.online) return setError("The node is not responding, so the miner view cannot be read.");
             setNodeBusy(true);
             setError(null);
-            void readNodeWatch(presetById(net.presetId).rpcUrl)
+            void readNodeWatch(net.rpcUrl)
               .then(setNodeRead)
               .catch((err: unknown) => setError(err instanceof Error ? err.message : "Could not read the node"))
               .finally(() => setNodeBusy(false));

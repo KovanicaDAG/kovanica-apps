@@ -42,7 +42,11 @@ class KovanicaNodeService : Service() {
             NodeRuntime.publish(this, NodeRuntime.snapshot.copy(phase = PHASE_STOPPED, note = "Stopped."))
             return START_NOT_STICKY
         }
-        chainId = intent?.getLongExtra(EXTRA_CHAIN_ID, chainId.toLong())?.toULong() ?: chainId
+        chainId = if (intent?.hasExtra(EXTRA_CHAIN_ID) == true) {
+            intent.getLongExtra(EXTRA_CHAIN_ID, chainId.toLong()).toULong()
+        } else {
+            NetworkPrefs.chainId(this).toULong()
+        }
         startInForeground()
         if (intent?.action == ACTION_VERIFY && thread != null) {
             handler?.removeCallbacksAndMessages(null)
@@ -125,6 +129,11 @@ class KovanicaNodeService : Service() {
             } else {
                 "Recent block interval: shown on chain 5"
             },
+            intervalTone = if (chainId == HYBRID_CHAIN) {
+                AirgapReview.intervalTone(NodeStore.recentTimestamps(this), profile.targetBlockMs.toLong())
+            } else {
+                "idle"
+            },
         )
         if (!allowsSync(NodePrefs.wifiAndChargingOnly(this))) {
             NodeRuntime.publish(this, base.copy(phase = PHASE_PAUSED, note = "Paused until the phone is on unmetered Wi-Fi and charging."))
@@ -169,6 +178,7 @@ class KovanicaNodeService : Service() {
             if (parentRound != null) NodeStore.save(this, parentRound, parent)
             val remembered = NodeStore.save(this, verified.round.toLong(), header.toString())
             val interval = AirgapReview.intervalLabel(NodeStore.recentTimestamps(this), profile.targetBlockMs.toLong())
+            val tone = AirgapReview.intervalTone(NodeStore.recentTimestamps(this), profile.targetBlockMs.toLong())
             NodeRuntime.publish(
                 this,
                 withPeers.copy(
@@ -181,6 +191,7 @@ class KovanicaNodeService : Service() {
                     headerCount = remembered.toString(),
                     storeBytes = NodeStore.databaseBytes(this).toString(),
                     intervalLine = interval,
+                    intervalTone = tone,
                 ),
             )
         } catch (error: Exception) {
@@ -252,6 +263,7 @@ object NodeRuntime {
         val pruningBadge: String = "Pruning window: 14,400 rounds (~16h)",
         val peerLine: String = "peers: — / 12 max",
         val intervalLine: String = "Recent block interval: —",
+        val intervalTone: String = "idle",
     )
 
     @Volatile

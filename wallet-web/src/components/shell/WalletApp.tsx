@@ -1,13 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { formatAtoms, formatKvnc } from "@/core/format";
 import type { TxPreview } from "@/core/session";
 import { AddressBook } from "@/components/contacts/AddressBook";
-import { PRESETS, chainName, presetById } from "@/lib/networks";
+import { chainName, presetById } from "@/lib/networks";
 import { broadcast, indexerLogs, probeNode, readAccount, receipt } from "@/services/rpc";
 import { onWalletLock, touchSession } from "@/services/tauri";
 import { addAccount, clearBackup, forgetDevice, isDesktopShell, loadVault, lock, lockUi, refreshDesktopSession, selectAccount, signReviewed, subscribeBackup } from "@/services/wallet";
 import { useActivity } from "@/stores/activity";
-import { signingLock, useNetwork } from "@/stores/network";
+import { savedNetworkChoice, signingLock, useNetwork } from "@/stores/network";
 import { useSession } from "@/stores/session";
 import { ActivityList } from "@/components/activity/ActivityList";
 import { ConfirmTx, type BroadcastNotice } from "@/components/confirm/ConfirmTx";
@@ -15,6 +15,7 @@ import { Contracts } from "@/components/contracts/Contracts";
 import { Onboarding } from "@/components/onboarding/Onboarding";
 import { Receive } from "@/components/receive/Receive";
 import { SendForm } from "@/components/send/SendForm";
+import { NetworkChoices } from "@/components/settings/NetworkChoices";
 import { SettingsDrawer } from "@/components/settings/SettingsDrawer";
 import { Watchlist } from "@/components/watch/Watchlist";
 import { useSettings } from "@/stores/settings";
@@ -32,7 +33,9 @@ export function WalletApp() {
   const [preview, setPreview] = useState<TxPreview | null>(null);
   const [notice, setNotice] = useState<BroadcastNotice>({ phase: "idle" });
   const [quoteTick, setQuoteTick] = useState(0);
+  const [host, setHost] = useState("");
   const [signing, setSigning] = useState(false);
+  const warned = useRef("");
   const [backup, setBackup] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sendTo, setSendTo] = useState("");
@@ -68,6 +71,8 @@ export function WalletApp() {
       useSession.getState().hydrate(loadVault());
     }
     useActivity.getState().hydrate();
+    const saved = savedNetworkChoice();
+    if (saved) useNetwork.getState().setRpcUrl(saved.rpcUrl, saved.presetId);
     setReady(true);
     return () => {
       stopBackup();
@@ -80,9 +85,19 @@ export function WalletApp() {
     let stop = false;
     const run = async () => {
       useNetwork.getState().setProbing(true);
-      const preset = presetById(useNetwork.getState().presetId);
-      const probe = await probeNode(preset.rpcUrl);
-      if (!stop) useNetwork.getState().applyProbe(probe);
+      const rpcUrl = useNetwork.getState().rpcUrl;
+      const probe = await probeNode(rpcUrl);
+      if (stop) return;
+      useNetwork.getState().applyProbe(probe);
+      if (!probe.online) {
+        const message = probe.error ?? "The node did not respond.";
+        if (warned.current !== message) {
+          warned.current = message;
+          toast(`${message} You can switch to the testnet fallback or enter a host.`);
+        }
+      } else {
+        warned.current = "";
+      }
     };
     void run();
     const timer = window.setInterval(() => void run(), 20000);
@@ -90,15 +105,14 @@ export function WalletApp() {
       stop = true;
       window.clearInterval(timer);
     };
-  }, [ready, net.presetId]);
+  }, [ready, net.presetId, net.rpcUrl]);
 
   useEffect(() => {
     if (!ready || session.status !== "unlocked" || !account || !net.online) return;
-    const preset = presetById(net.presetId);
-    void readAccount(preset.rpcUrl, account.address).then((state) => {
+    void readAccount(net.rpcUrl, account.address).then((state) => {
       useNetwork.getState().setAccountState(state.balance, state.nonce, state.fee);
     });
-  }, [ready, session.status, account?.address, net.online, net.presetId, net.probedChainId]);
+  }, [ready, session.status, account?.address, net.online, net.presetId, net.probedChainId, net.rpcUrl]);
 
   useEffect(() => {
     const mark = () => bumpIdle();
@@ -118,16 +132,25 @@ export function WalletApp() {
 
   useEffect(() => {
     if (!ready || !net.online) return;
-    const pending = useActivity.getState().rows.filter((row) => row.status === "pending");
-    if (pending.length === 0) return;
-    const preset = presetById(net.presetId);
-    void Promise.all(
-      pending.map(async (row) => {
-        const result = await receipt(preset.rpcUrl, row.hash);
-        if (result && result.status !== "pending") useActivity.getState().mark(row.hash, result.status, result.height);
-      }),
-    );
-  }, [ready, net.online, net.presetId, tab]);
+    let stop = false;
+    const run = async () => {
+      const pending = useActivity.getState().rows.filter((row) => row.status === "pending");
+      if (pending.length === 0) return;
+      const rpcUrl = useNetwork.getState().rpcUrl;
+      await Promise.all(
+        pending.map(async (row) => {
+          const result = await receipt(rpcUrl, row.hash);
+          if (!stop && result && result.status !== "pending") useActivity.getState().mark(row.hash, result.status, result.height);
+        }),
+      );
+    };
+    void run();
+    const timer = window.setInterval(() => void run(), 5_000);
+    return () => {
+      stop = true;
+      window.clearInterval(timer);
+    };
+  }, [ready, net.online, net.presetId, net.rpcUrl]);
 
   useEffect(() => {
     if (!net.indexerUrl.trim()) {
@@ -144,7 +167,7 @@ export function WalletApp() {
     if (!preview) return;
     const preset = presetById(net.presetId);
     setNotice({ phase: "sending", label: preset.label });
-    const broadcastHash = await broadcast(preset.rpcUrl, raw);
+    const broadcastHash = await broadcast(net.rpcUrl, raw);
     const shown = broadcastHash || hash;
     useActivity.getState().push({
       hash: shown,
@@ -194,8 +217,7 @@ export function WalletApp() {
   async function requote() {
     try {
       if (account) {
-        const preset = presetById(net.presetId);
-        const state = await readAccount(preset.rpcUrl, account.address);
+        const state = await readAccount(net.rpcUrl, account.address);
         useNetwork.getState().setAccountState(state.balance, state.nonce, state.fee);
       }
       setQuoteTick((tick) => tick + 1);
@@ -236,17 +258,8 @@ export function WalletApp() {
             {net.probing ? "Probing…" : net.online ? `height ${net.committedHeight ?? "—"} · ${net.latencyMs ?? "—"} ms` : (net.error ?? "Offline")}
           </p>
           {lockState.locked ? <p className="mt-3 text-sm text-clay">{lockState.reason}</p> : null}
-          <div className="mt-4 grid grid-cols-2 gap-2">
-            {PRESETS.map((preset) => (
-              <button
-                key={preset.id}
-                type="button"
-                className={`min-h-11 rounded-full border text-xs ${net.presetId === preset.id ? "border-copper text-copper" : "border-line text-muted"}`}
-                onClick={() => useNetwork.getState().selectPreset(preset.id)}
-              >
-                {preset.label}
-              </button>
-            ))}
+          <div className="mt-4">
+            <NetworkChoices />
           </div>
           <nav className="mt-6 grid grid-cols-3 gap-2 md:grid-cols-1">
             {(["home", "send", "receive", "activity", "contracts", "watch"] as const).map((item) => (

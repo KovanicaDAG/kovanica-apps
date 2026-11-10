@@ -23,7 +23,7 @@ export const NETWORK_PRESETS: readonly NetworkPreset[] = [
   },
   {
     id: "mainnet",
-    label: "Mainnet (Chain 1)",
+    label: "Mainnet (Chain 1) · read-only",
     chainId: 1,
     rpcUrl: "https://rpc.kovanica.online/rpc",
   },

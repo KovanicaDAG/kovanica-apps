@@ -82,5 +82,8 @@ class AirgapReviewTest {
             "Recent block interval: 4.0s (target 4s)",
             AirgapReview.intervalLabel(listOf(0L, 4_000L), 4_000L),
         )
+        assertEquals("ok", AirgapReview.intervalTone(listOf(0L, 4_200L), 4_000L))
+        assertEquals("drift", AirgapReview.intervalTone(listOf(0L, 8_000L), 4_000L))
+        assertEquals("idle", AirgapReview.intervalTone(listOf(1_000L), 4_000L))
     }
 }
