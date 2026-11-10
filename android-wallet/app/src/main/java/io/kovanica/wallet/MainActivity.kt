@@ -81,6 +81,8 @@ class MainActivity : Activity() {
     private lateinit var nodePhase: TextView
     private lateinit var nodeMeta: TextView
     private lateinit var wifiToggle: Button
+    private lateinit var miningToggle: Button
+    private lateinit var localRpcButton: Button
     private lateinit var fallbackButton: Button
     private lateinit var claimButton: Button
     private var pendingCreate: CreatedWallet? = null
@@ -1940,15 +1942,47 @@ class MainActivity : Activity() {
         addStack(button("Start node") { startNode() }, 14)
         addStack(button("Verify now", filled = false) { verifyNow() }, 10)
         addStack(button("Stop node", filled = false) { stopNode() }, 10)
+        localRpcButton = button(localRpcLabel(), filled = false) { toggleLocalRpc() }
+        addStack(localRpcButton, 10)
+        miningToggle = button(miningLabel(), filled = false) { toggleMicroMining() }
+        addStack(miningToggle, 10)
         wifiToggle = button(wifiLabel(), filled = false) { toggleWifiOnly() }
         addStack(wifiToggle, 10)
         addStack(
             caption(
-                "Chain 5 headers are checked on this phone. Turn Wi-Fi and charging off only if you want those checks on cellular.",
+                "Chain 5 PoW headers and Wasmi execution run locally on this phone. Micro-mining runs bounded bursts safely under 36.0°C thermal protection while on Wi-Fi and charging.",
             ),
             12,
         )
         renderNode(NodeRuntime.snapshot)
+    }
+
+    private fun localRpcLabel(): String {
+        val currentRpc = rpcField.text.toString().trim()
+        val localRpc = "http://127.0.0.1:8545"
+        return if (currentRpc == localRpc) "RPC: Using Local Node (127.0.0.1:8545)" else "Switch RPC to Local Phone Node"
+    }
+
+    private fun toggleLocalRpc() {
+        val currentRpc = rpcField.text.toString().trim()
+        val localRpc = "http://127.0.0.1:8545"
+        if (currentRpc == localRpc) {
+            rpcField.setText(current.rpcUrl)
+            Toast.makeText(this, "Switched back to network RPC", Toast.LENGTH_SHORT).show()
+        } else {
+            rpcField.setText(localRpc)
+            Toast.makeText(this, "Switched to Local Embedded RPC", Toast.LENGTH_SHORT).show()
+        }
+        if (::localRpcButton.isInitialized) localRpcButton.text = localRpcLabel()
+    }
+
+    private fun miningLabel(): String =
+        if (NodePrefs.microMiningEnabled(this)) "Micro-mining on Chain 5: On" else "Micro-mining on Chain 5: Off"
+
+    private fun toggleMicroMining() {
+        NodePrefs.setMicroMiningEnabled(this, !NodePrefs.microMiningEnabled(this))
+        if (::miningToggle.isInitialized) miningToggle.text = miningLabel()
+        if (NodeRuntime.snapshot.phase != NodeRuntime.PHASE_STOPPED) verifyNow()
     }
 
     private fun startNode() {
@@ -1988,13 +2022,24 @@ class MainActivity : Activity() {
             "ok", "drift" -> "● ${snapshot.intervalLine}"
             else -> snapshot.intervalLine
         }
+        val rpcLine = if (snapshot.rpcRunning) "● Embedded RPC: http://${snapshot.bind} (ACTIVE)" else "Embedded RPC: stopped"
+        val miningLine = if (snapshot.miningEnabled) {
+            val therm = if (snapshot.isThermalGated) "⚠ GATED (${snapshot.miningTempCelsius}°C >= 36°C)" else "SAFE (${snapshot.miningTempCelsius}°C)"
+            "Micro-mining: ${snapshot.miningHashRate}  ·  Mined: ${snapshot.blocksMined} blocks\nThermal protection: $therm"
+        } else {
+            "Micro-mining on Chain 5: Off"
+        }
+        val stateRootLine = if (snapshot.stateRoot != "—") "State Root: ${snapshot.stateRoot}" else ""
+
         val body = "round ${snapshot.round}  ·  work ${snapshot.work}\n" +
             "cumulative ${snapshot.cumulative}\n" +
             "target_bits ${snapshot.targetBits}\n" +
             "pow ${snapshot.powHash}\n" +
             "GHOSTDAG K=${snapshot.ghostdagK}  ·  target ${snapshot.targetMs} ms\n" +
             "pruning ${snapshot.pruningRounds} rounds  ·  cache ${snapshot.cacheMb} MiB\n" +
-            "local RPC ${snapshot.bind}\n" +
+            rpcLine + "\n" +
+            miningLine + "\n" +
+            (if (stateRootLine.isNotEmpty()) "$stateRootLine\n" else "") +
             "${snapshot.pruningBadge}\n" +
             "Verified headers in window: ${snapshot.headerCount}\n" +
             "Local DB: ${dbLabel(snapshot.storeBytes, snapshot.cacheMb)}\n" +
@@ -2007,7 +2052,13 @@ class MainActivity : Activity() {
             val color = if (snapshot.intervalTone == "ok") 0xFF7D9A78.toInt() else 0xFFE0B15A.toInt()
             span.setSpan(ForegroundColorSpan(color), at, at + 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
+        val rpcAt = body.indexOf("● Embedded RPC")
+        if (rpcAt >= 0) {
+            span.setSpan(ForegroundColorSpan(0xFF7D9A78.toInt()), rpcAt, rpcAt + 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
         nodeMeta.text = span
+        if (::localRpcButton.isInitialized) localRpcButton.text = localRpcLabel()
+        if (::miningToggle.isInitialized) miningToggle.text = miningLabel()
     }
 
     private fun dbLabel(bytes: String, limitMb: String): String {
