@@ -194,6 +194,7 @@ class KovanicaNodeService : Service() {
             } else {
                 "Verified on this phone."
             }
+            val stateRoot = NodeStore.latestStateRoot(this) ?: "—"
             NodeRuntime.publish(
                 this,
                 withPeers.copy(
@@ -207,6 +208,7 @@ class KovanicaNodeService : Service() {
                     storeBytes = NodeStore.databaseBytes(this).toString(),
                     intervalLine = interval,
                     intervalTone = tone,
+                    stateRoot = stateRoot,
                 ),
             )
         } catch (error: Exception) {
@@ -279,6 +281,7 @@ object NodeRuntime {
         val peerLine: String = "peers: — / 12 max",
         val intervalLine: String = "Recent block interval: —",
         val intervalTone: String = "idle",
+        val stateRoot: String = "—",
     )
 
     @Volatile
@@ -340,6 +343,46 @@ object NodeStore {
             uniffi.kovanica_light.getLocalStorageStats(localDbPath(context))
         }.getOrNull()
         return stats?.tipRound?.toLong() ?: 0L
+    }
+
+    fun latestStateRoot(context: Context): String? {
+        return runCatching {
+            uniffi.kovanica_light.getLocalStateRoot(localDbPath(context))
+        }.getOrNull()
+    }
+
+    fun simulateCall(
+        context: Context,
+        caller: String,
+        contract: String,
+        method: String,
+        argsHex: String,
+        value: ULong = 0uL,
+        gasLimit: ULong = 100_000uL,
+        chainId: ULong = 5uL
+    ): uniffi.kovanica_light.LocalSimulationResult? {
+        return runCatching {
+            uniffi.kovanica_light.simulateLocalCall(
+                localDbPath(context),
+                caller,
+                contract,
+                method,
+                argsHex,
+                value,
+                gasLimit,
+                chainId
+            )
+        }.getOrNull()
+    }
+
+    fun executeBlock(
+        context: Context,
+        blockJson: String,
+        chainId: ULong = 5uL
+    ): uniffi.kovanica_light.BlockExecutionSummary? {
+        return runCatching {
+            uniffi.kovanica_light.executeBlockTransactions(localDbPath(context), blockJson, chainId)
+        }.getOrNull()
     }
 
     fun save(context: Context, round: Long, headerJson: String): Int {

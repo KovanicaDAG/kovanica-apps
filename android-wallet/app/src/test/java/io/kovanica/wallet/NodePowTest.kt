@@ -59,4 +59,31 @@ class NodePowTest {
         assertTrue(header != null)
         assertEquals(5, header?.optInt("chain_id"))
     }
+
+    @Test
+    fun node_store_latest_state_root_null_on_missing_db() {
+        val filesDir = java.io.File("/tmp/kovanica-m4-nonexistent-" + System.currentTimeMillis())
+        val context = object : android.content.ContextWrapper(null) {
+            override fun getFilesDir(): java.io.File = filesDir
+        }
+        assertEquals(null, NodeStore.latestStateRoot(context))
+    }
+
+    @Test
+    fun node_store_simulate_call_graceful_on_missing_db() {
+        val filesDir = java.io.File("/tmp/kovanica-m4-sim-" + System.currentTimeMillis())
+        val context = object : android.content.ContextWrapper(null) {
+            override fun getFilesDir(): java.io.File = filesDir
+        }
+        val sim = NodeStore.simulateCall(
+            context,
+            "kvnc1111111111111111111111111111111111111111111111111111111111dag",
+            "kvnc2222222222222222222222222222222222222222222222222222222222dag",
+            "test",
+            "0x"
+        )
+        // If native library is loaded in JVM test environment, it returns a failed simulation result;
+        // if uniffi native lib is not loaded, runCatching caught it and returned null. In either case, it must not throw!
+        assertTrue(sim == null || !sim.success)
+    }
 }

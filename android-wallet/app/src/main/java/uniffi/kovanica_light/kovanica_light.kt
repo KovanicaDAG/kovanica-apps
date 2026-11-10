@@ -696,9 +696,15 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_derive_comms_id(
     ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_execute_block_transactions(
+    ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_faucet_allowed(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_get_local_account(
+    ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_get_local_contract_storage(
+    ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_get_local_state_root(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_get_local_storage_stats(
     ): Int
@@ -733,6 +739,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_kovanica_light_ffi_checksum_func_sign_transfer_raw(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_sign_witness_raw(
+    ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_simulate_local_call(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_store_verified_block_header(
     ): Int
@@ -787,9 +795,15 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_derive_comms_id(`pubkeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_execute_block_transactions(`dbPath`: RustBuffer.ByValue,`blockJson`: RustBuffer.ByValue,`chainId`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_faucet_allowed(`chainId`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_kovanica_light_ffi_fn_func_get_local_account(`dbPath`: RustBuffer.ByValue,`address`: RustBuffer.ByValue,`chainId`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_get_local_contract_storage(`dbPath`: RustBuffer.ByValue,`contractAddress`: RustBuffer.ByValue,`keyHex`: RustBuffer.ByValue,`chainId`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_get_local_state_root(`dbPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_get_local_storage_stats(`dbPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -824,6 +838,8 @@ internal object UniffiLib {
     external fun uniffi_kovanica_light_ffi_fn_func_sign_transfer_raw(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`chainId`: Long,`to`: RustBuffer.ByValue,`amount`: Long,`nonce`: Long,`feeRate`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_sign_witness_raw(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`chainId`: Long,`epoch`: Long,`beaconHex`: RustBuffer.ByValue,`nonce`: Long,`feeRate`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_simulate_local_call(`dbPath`: RustBuffer.ByValue,`callerAddress`: RustBuffer.ByValue,`contractAddress`: RustBuffer.ByValue,`method`: RustBuffer.ByValue,`argsHex`: RustBuffer.ByValue,`value`: Long,`gasLimit`: Long,`chainId`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_store_verified_block_header(`dbPath`: RustBuffer.ByValue,`headerJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
@@ -996,10 +1012,19 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_kovanica_light_ffi_checksum_func_derive_comms_id() != 30377) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_execute_block_transactions() != 5262) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_faucet_allowed() != 22913) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_get_local_account() != 39088) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_get_local_contract_storage() != 41507) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_get_local_state_root() != 50163) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_get_local_storage_stats() != 54222) {
@@ -1051,6 +1076,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_sign_witness_raw() != 3162) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_simulate_local_call() != 25377) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_store_verified_block_header() != 55102) {
@@ -1432,6 +1460,67 @@ public object FfiConverterTypeBatchSyncResult: FfiConverterRustBuffer<BatchSyncR
 
 
 /**
+ * Summary result of executing all transactions in a block on-device.
+ */
+data class BlockExecutionSummary (
+    var `round`: kotlin.ULong
+    , 
+    var `txsExecuted`: kotlin.ULong
+    , 
+    var `txsSucceeded`: kotlin.ULong
+    , 
+    var `txsFailed`: kotlin.ULong
+    , 
+    var `stateRoot`: kotlin.String
+    , 
+    var `receipts`: List<LocalExecutionReceipt>
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeBlockExecutionSummary: FfiConverterRustBuffer<BlockExecutionSummary> {
+    override fun read(buf: ByteBuffer): BlockExecutionSummary {
+        return BlockExecutionSummary(
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterSequenceTypeLocalExecutionReceipt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: BlockExecutionSummary) = (
+            FfiConverterULong.allocationSize(value.`round`) +
+            FfiConverterULong.allocationSize(value.`txsExecuted`) +
+            FfiConverterULong.allocationSize(value.`txsSucceeded`) +
+            FfiConverterULong.allocationSize(value.`txsFailed`) +
+            FfiConverterString.allocationSize(value.`stateRoot`) +
+            FfiConverterSequenceTypeLocalExecutionReceipt.allocationSize(value.`receipts`)
+    )
+
+    override fun write(value: BlockExecutionSummary, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`round`, buf)
+            FfiConverterULong.write(value.`txsExecuted`, buf)
+            FfiConverterULong.write(value.`txsSucceeded`, buf)
+            FfiConverterULong.write(value.`txsFailed`, buf)
+            FfiConverterString.write(value.`stateRoot`, buf)
+            FfiConverterSequenceTypeLocalExecutionReceipt.write(value.`receipts`, buf)
+    }
+}
+
+
+
+/**
  * A new wallet. The mnemonic is shown once by the caller.
  */
 data class CreatedWallet (
@@ -1574,6 +1663,108 @@ public object FfiConverterTypeLocalAccountInfo: FfiConverterRustBuffer<LocalAcco
             FfiConverterULong.write(value.`balance`, buf)
             FfiConverterULong.write(value.`nonce`, buf)
             FfiConverterBoolean.write(value.`found`, buf)
+    }
+}
+
+
+
+/**
+ * Individual transaction receipt returned from on-device execution.
+ */
+data class LocalExecutionReceipt (
+    var `txHash`: kotlin.String
+    , 
+    var `success`: kotlin.Boolean
+    , 
+    var `gasUsed`: kotlin.ULong
+    , 
+    var `error`: kotlin.String?
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeLocalExecutionReceipt: FfiConverterRustBuffer<LocalExecutionReceipt> {
+    override fun read(buf: ByteBuffer): LocalExecutionReceipt {
+        return LocalExecutionReceipt(
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: LocalExecutionReceipt) = (
+            FfiConverterString.allocationSize(value.`txHash`) +
+            FfiConverterBoolean.allocationSize(value.`success`) +
+            FfiConverterULong.allocationSize(value.`gasUsed`) +
+            FfiConverterOptionalString.allocationSize(value.`error`)
+    )
+
+    override fun write(value: LocalExecutionReceipt, buf: ByteBuffer) {
+            FfiConverterString.write(value.`txHash`, buf)
+            FfiConverterBoolean.write(value.`success`, buf)
+            FfiConverterULong.write(value.`gasUsed`, buf)
+            FfiConverterOptionalString.write(value.`error`, buf)
+    }
+}
+
+
+
+/**
+ * Result of dry-running/simulating a contract call or transfer on-device.
+ */
+data class LocalSimulationResult (
+    var `success`: kotlin.Boolean
+    , 
+    var `gasUsed`: kotlin.ULong
+    , 
+    var `returnDataHex`: kotlin.String
+    , 
+    var `error`: kotlin.String?
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeLocalSimulationResult: FfiConverterRustBuffer<LocalSimulationResult> {
+    override fun read(buf: ByteBuffer): LocalSimulationResult {
+        return LocalSimulationResult(
+            FfiConverterBoolean.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: LocalSimulationResult) = (
+            FfiConverterBoolean.allocationSize(value.`success`) +
+            FfiConverterULong.allocationSize(value.`gasUsed`) +
+            FfiConverterString.allocationSize(value.`returnDataHex`) +
+            FfiConverterOptionalString.allocationSize(value.`error`)
+    )
+
+    override fun write(value: LocalSimulationResult, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`success`, buf)
+            FfiConverterULong.write(value.`gasUsed`, buf)
+            FfiConverterString.write(value.`returnDataHex`, buf)
+            FfiConverterOptionalString.write(value.`error`, buf)
     }
 }
 
@@ -2170,6 +2361,34 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         }
     }
 }
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeLocalExecutionReceipt: FfiConverterRustBuffer<List<LocalExecutionReceipt>> {
+    override fun read(buf: ByteBuffer): List<LocalExecutionReceipt> {
+        val len = buf.getInt()
+        return List<LocalExecutionReceipt>(len) {
+            FfiConverterTypeLocalExecutionReceipt.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<LocalExecutionReceipt>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeLocalExecutionReceipt.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<LocalExecutionReceipt>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeLocalExecutionReceipt.write(it, buf)
+        }
+    }
+}
         /**
          * Re-encrypt the wallet under `new_passphrase`; returns the new keystore JSON.
          *
@@ -2398,6 +2617,24 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
     
 
         /**
+         * Deterministically execute all transactions in a block using the on-device Wasmi engine,
+         * applying state transitions (transfers, contracts) to the local RedB storage.
+         */
+    @Throws(LightFfiException::class) fun `executeBlockTransactions`(`dbPath`: kotlin.String, `blockJson`: kotlin.String, `chainId`: kotlin.ULong): BlockExecutionSummary {
+            return FfiConverterTypeBlockExecutionSummary.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_execute_block_transactions(
+    
+        
+        FfiConverterString.lower(`dbPath`),
+        FfiConverterString.lower(`blockJson`),
+        FfiConverterULong.lower(`chainId`),_status)
+}
+    )
+    }
+    
+
+        /**
          * True when the app may show the testnet faucet.
          *
          * Allowed exclusively on testnet (chain 4, [`TESTNET_CHAIN_ID`]), which remains
@@ -2427,6 +2664,39 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         FfiConverterString.lower(`dbPath`),
         FfiConverterString.lower(`address`),
         FfiConverterULong.lower(`chainId`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Read a raw contract storage key from local storage on device.
+         */
+    @Throws(LightFfiException::class) fun `getLocalContractStorage`(`dbPath`: kotlin.String, `contractAddress`: kotlin.String, `keyHex`: kotlin.String, `chainId`: kotlin.ULong): kotlin.String? {
+            return FfiConverterOptionalString.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_get_local_contract_storage(
+    
+        
+        FfiConverterString.lower(`dbPath`),
+        FfiConverterString.lower(`contractAddress`),
+        FfiConverterString.lower(`keyHex`),
+        FfiConverterULong.lower(`chainId`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Query the latest account state root hash from local embedded node storage.
+         */
+    @Throws(LightFfiException::class) fun `getLocalStateRoot`(`dbPath`: kotlin.String): kotlin.String? {
+            return FfiConverterOptionalString.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_get_local_state_root(
+    
+        
+        FfiConverterString.lower(`dbPath`),_status)
 }
     )
     }
@@ -2773,6 +3043,29 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         FfiConverterString.lower(`beaconHex`),
         FfiConverterULong.lower(`nonce`),
         FfiConverterULong.lower(`feeRate`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Simulate a contract call or transfer directly on the mobile device (dry-run with Wasmi)
+         * without broadcasting or paying gas.
+         */
+    @Throws(LightFfiException::class) fun `simulateLocalCall`(`dbPath`: kotlin.String, `callerAddress`: kotlin.String, `contractAddress`: kotlin.String, `method`: kotlin.String, `argsHex`: kotlin.String, `value`: kotlin.ULong, `gasLimit`: kotlin.ULong, `chainId`: kotlin.ULong): LocalSimulationResult {
+            return FfiConverterTypeLocalSimulationResult.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_simulate_local_call(
+    
+        
+        FfiConverterString.lower(`dbPath`),
+        FfiConverterString.lower(`callerAddress`),
+        FfiConverterString.lower(`contractAddress`),
+        FfiConverterString.lower(`method`),
+        FfiConverterString.lower(`argsHex`),
+        FfiConverterULong.lower(`value`),
+        FfiConverterULong.lower(`gasLimit`),
+        FfiConverterULong.lower(`chainId`),_status)
 }
     )
     }
