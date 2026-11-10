@@ -1,3 +1,4 @@
+import { storageBytes } from "@/core/contracts";
 import { proxyHealth, proxyIndexer, proxyRpc } from "./rpc.functions";
 
 export type SyncProbe = {
@@ -229,4 +230,25 @@ export async function readNodeWatch(rpcUrl: string): Promise<{ dag: string; temp
     tryMethod(rpcUrl, "kovanica_getLeaderHeader", []),
   ]);
   return { dag, template, header };
+}
+
+export async function readStorageAt(rpcUrl: string, address: string, slotHex: string): Promise<Uint8Array | null> {
+  const slot = slotHex.startsWith("0x") ? slotHex : `0x${slotHex}`;
+  let last = "storage was not returned";
+  for (const candidate of withRpcPath(rpcUrl)) {
+    try {
+      const result = await proxyRpc({ data: { rpcUrl: candidate, method: "kovanica_getStorageAt", params: [address, slot] } });
+      if (!result.ok) throw new Error(`node returned ${result.status}`);
+      const parsed = asRecord(parseJson(result.body));
+      if (!parsed) throw new Error("node did not return JSON");
+      if (parsed.error) {
+        const err = asRecord(parsed.error);
+        throw new Error(typeof err?.message === "string" ? err.message : "RPC error");
+      }
+      return storageBytes("result" in parsed ? parsed.result : null);
+    } catch (error) {
+      last = error instanceof Error ? error.message : last;
+    }
+  }
+  throw new Error(last);
 }

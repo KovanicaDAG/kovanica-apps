@@ -263,7 +263,7 @@ export function WalletApp() {
             <NetworkChoices />
           </div>
           <nav className="mt-6 grid grid-cols-3 gap-2 md:grid-cols-1">
-            {(["home", "send", "receive", "activity", "contracts", "watch"] as const).map((item) => (
+            {(["home", "contracts", "send", "activity", "receive", "watch"] as const).map((item) => (
               <button key={item} type="button" className={`min-h-11 rounded-full px-3 text-left capitalize ${tab === item ? "bg-surface text-paper" : "text-muted"}`} onClick={() => setTab(item)}>
                 {item}
               </button>
@@ -314,7 +314,7 @@ export function WalletApp() {
           {tab === "send" ? <SendForm onReview={(next) => { setNotice({ phase: "idle" }); setPreview(next); }} prefillTo={sendTo} quoteTick={quoteTick} /> : null}
           {tab === "receive" && account ? <Receive address={account.address} pathLabel={account.pathLabel} /> : null}
           {tab === "activity" ? <ActivityList /> : null}
-          {tab === "contracts" ? <Contracts onReview={(next) => { setNotice({ phase: "idle" }); setPreview(next); }} prefill={contractPrefill} /> : null}
+          {tab === "contracts" ? <Contracts onReview={(next) => { setNotice({ phase: "idle" }); setPreview(next); }} prefill={contractPrefill} ownerAddress={account?.address ?? ""} /> : null}
           {tab === "watch" ? (
             <Watchlist
               onSend={(address) => { setSendTo(address); setTab("send"); }}

@@ -35,6 +35,17 @@ export function u64le(value: bigint): Uint8Array {
   return out;
 }
 
+export function u128le(value: bigint): Uint8Array {
+  if (value < 0n || value > 0xffffffffffffffffffffffffffffffffn) throw new Error("u128 out of range");
+  const out = new Uint8Array(16);
+  const view = new DataView(out.buffer);
+  view.setUint32(0, Number(value & 0xffffffffn), true);
+  view.setUint32(4, Number((value >> 32n) & 0xffffffffn), true);
+  view.setUint32(8, Number((value >> 64n) & 0xffffffffn), true);
+  view.setUint32(12, Number((value >> 96n) & 0xffffffffn), true);
+  return out;
+}
+
 export function bytesToHex(bytes: Uint8Array): string {
   let hex = "";
   for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");

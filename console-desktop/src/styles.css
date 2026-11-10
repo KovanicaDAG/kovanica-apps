@@ -64,7 +64,8 @@ label {
   gap: 0.5rem;
 }
 
-input {
+input,
+select {
   flex: 1 1 16rem;
   min-width: 0;
   padding: 0.55rem 0.7rem;
