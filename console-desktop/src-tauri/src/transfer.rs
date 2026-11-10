@@ -314,6 +314,64 @@ fn read_fee_rate(rpc: &impl Rpc) -> Result<u64, String> {
     parse_qty(&value).map_err(|_| "The node did not return a fee.".to_string())
 }
 
+
+/// Fee and nonce for a contract call. Signing still happens only after review.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CallQuote {
+    pub chain_id: String,
+    pub nonce: String,
+    pub fee_atoms: String,
+    pub fee_display: String,
+    pub address: String,
+}
+
+pub fn quote_call(rpc: &impl Rpc, endpoint: &str, address: &str) -> Result<CallQuote, String> {
+    let status = fetch_status(rpc, endpoint).map_err(|err| err.to_string())?;
+    let chain = crate::history::proven_chain_id(status.chain_id.as_deref())
+        .ok_or_else(|| "The chain id is not proven, so this wallet will not sign.".to_string())?;
+    let nonce = read_nonce(rpc, address)?;
+    let fee = read_fee_rate(rpc)?;
+    Ok(CallQuote {
+        chain_id: chain.to_string(),
+        nonce: nonce.to_string(),
+        fee_atoms: fee.to_string(),
+        fee_display: format_kuna_atoms(fee),
+        address: address.to_string(),
+    })
+}
+
+pub fn broadcast_raw(rpc: &impl Rpc, raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    let hex = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+        .unwrap_or(trimmed);
+    if hex.is_empty()
+        || hex.len() > 200_000
+        || hex.len() % 2 != 0
+        || !hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("The signed transaction is not hex.".to_string());
+    }
+    let result = rpc
+        .call("kovanica_sendRawTransaction", json!([hex]))
+        .map_err(|err| err.to_string())?;
+    accept_hash(&result)
+}
+
+pub fn storage_at(rpc: &impl Rpc, address: &str, slot: &str) -> Result<Option<String>, String> {
+    let value = rpc
+        .call("kovanica_getStorageAt", json!([address, slot]))
+        .map_err(|err| err.to_string())?;
+    match value {
+        Value::Null => Ok(None),
+        Value::String(text) if text.is_empty() => Ok(None),
+        Value::String(text) => Ok(Some(text)),
+        other => Ok(Some(other.to_string())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

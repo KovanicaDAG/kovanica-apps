@@ -1,8 +1,8 @@
 import { blake3 } from "@noble/hashes/blake3.js";
 import { acceptSigned, exportUnsigned } from "./airgap";
 import { checkAddress, decodeAddress, encodeAddress } from "./address";
-import { asciiPad, bytesToHex, concat, hexToBytes, u64le } from "./bytes";
-import { buildContractCall } from "./contracts";
+import { asciiPad, bytesToHex, concat, hexToBytes, u32le, u64le, u128le } from "./bytes";
+import { buildContractCall, decodeHtlc, decodeTokenState, decodeVault, tokenStateSlot } from "./contracts";
 import { bip39Seed, deriveBip44, deriveHardened, entropyFromPhrase, generatePhrase, hdPrivateKey, isValidMnemonic, masterFromSeed } from "./hd";
 import { encodeRawTransaction, publicKeyFromSeed, signHash, signingHash } from "./tx";
 
@@ -74,58 +74,94 @@ if (!checkAddress("0x" + "11".repeat(32), 4).ok) throw new Error("chain 4 reject
 if (!checkAddress("0x" + "11".repeat(32), 1337).ok) throw new Error("local rejected legacy hex");
 
 const recipient = encodeAddress(to);
+const hashlock = new Uint8Array(32).fill(0x44);
+const swapId = new Uint8Array(32).fill(0x11);
+const msId = new Uint8Array(32).fill(0x66);
 const base = {
   chainId: 1,
+  claimer: recipient,
+  beneficiary: recipient,
   recipient,
   account: recipient,
+  hash: bytesToHex(hashlock),
+  secret: "",
+  id: bytesToHex(swapId),
+  timelockMs: null as bigint | null,
+  lockUntilMs: null as bigint | null,
   amountAtoms: null as bigint | null,
   tokenUnits: null as bigint | null,
-  hashlock: "",
-  timelockHeight: null as bigint | null,
-  lockId: null as bigint | null,
-  secretPreimage: "",
-  proposalId: null as bigint | null,
+  txId: null as bigint | null,
   callDataHex: "",
 };
-const withdraw = buildContractCall({ ...base, contract: "vault", method: "withdraw", amountAtoms: 1000n });
-if (bytesToHex(withdraw.args) !== bytesToHex(concat([to, u64le(1000n)]))) throw new Error("vault withdraw args");
-const claimed = buildContractCall({ ...base, contract: "vault", method: "claim" });
-if (claimed.args.length !== 0) throw new Error("vault claim should have no args");
+const locked = buildContractCall({ ...base, contract: "htlc", method: "htlc_create", timelockMs: 9n, amountAtoms: 1000n });
+if (bytesToHex(locked.args) !== bytesToHex(concat([to, u128le(1000n), hashlock, u64le(9n)]))) throw new Error("htlc_create args");
+const secret = new TextEncoder().encode("preimage");
+const claimedLock = buildContractCall({ ...base, contract: "htlc", method: "htlc_claim", secret: "preimage" });
+if (bytesToHex(claimedLock.args) !== bytesToHex(concat([swapId, u64le(BigInt(secret.length)), secret]))) throw new Error("htlc_claim args");
+const refunded = buildContractCall({ ...base, contract: "htlc", method: "htlc_refund" });
+if (bytesToHex(refunded.args) !== bytesToHex(swapId) || refunded.method !== "htlc_refund") throw new Error("htlc_refund args");
 
-const hashlock = new Uint8Array(32).fill(0x44);
-const locked = buildContractCall({ ...base, contract: "htlc", method: "lock", hashlock: bytesToHex(hashlock), timelockHeight: 9n });
-if (bytesToHex(locked.args) !== bytesToHex(concat([to, hashlock, u64le(9n)]))) throw new Error("htlc lock args");
-const secret = new Uint8Array(32).fill(0x55);
-const claimedLock = buildContractCall({ ...base, contract: "htlc", method: "claim", lockId: 7n, secretPreimage: bytesToHex(secret) });
-if (bytesToHex(claimedLock.args) !== bytesToHex(concat([u64le(7n), secret]))) throw new Error("htlc claim args");
-const refunded = buildContractCall({ ...base, contract: "htlc", method: "refund", lockId: 7n });
-if (bytesToHex(refunded.args) !== bytesToHex(u64le(7n))) throw new Error("htlc refund args");
+const created = buildContractCall({ ...base, contract: "vault", method: "vault_create", lockUntilMs: 50n, amountAtoms: 5n });
+if (bytesToHex(created.args) !== bytesToHex(concat([to, u128le(5n), u32le(0), u64le(50n)]))) throw new Error("vault_create args");
+const vaultClaim = buildContractCall({ ...base, contract: "vault", method: "vault_claim" });
+if (bytesToHex(vaultClaim.args) !== bytesToHex(swapId) || vaultClaim.method !== "vault_claim") throw new Error("vault_claim args");
+const cancelled = buildContractCall({ ...base, contract: "vault", method: "vault_cancel" });
+if (bytesToHex(cancelled.args) !== bytesToHex(swapId) || cancelled.method !== "vault_cancel") throw new Error("vault_cancel args");
 
-const proposed = buildContractCall({ ...base, contract: "multisig", method: "propose", amountAtoms: 42n });
-if (bytesToHex(proposed.args) !== bytesToHex(concat([to, u64le(42n), u64le(0n)]))) throw new Error("multisig propose args");
-const approved = buildContractCall({ ...base, contract: "multisig", method: "approve", proposalId: 3n });
-if (bytesToHex(approved.args) !== bytesToHex(u64le(3n))) throw new Error("multisig approve args");
-const moved = buildContractCall({ ...base, contract: "token", method: "transfer", tokenUnits: 5n });
-if (bytesToHex(moved.args) !== bytesToHex(concat([to, u64le(5n)]))) throw new Error("token transfer args");
-const minted = buildContractCall({ ...base, contract: "token", method: "mint", tokenUnits: 8n });
-if (bytesToHex(minted.args) !== bytesToHex(concat([to, u64le(8n)]))) throw new Error("token mint args");
+const proposed = buildContractCall({ ...base, contract: "multisig", method: "multisig_propose", id: bytesToHex(msId), amountAtoms: 42n });
+if (bytesToHex(proposed.args) !== bytesToHex(concat([msId, to, u128le(42n), u64le(0n)]))) throw new Error("multisig_propose args");
+const confirmed = buildContractCall({ ...base, contract: "multisig", method: "multisig_confirm", id: bytesToHex(msId), txId: 3n });
+if (bytesToHex(confirmed.args) !== bytesToHex(concat([msId, u64le(3n)])) || confirmed.method !== "multisig_confirm") throw new Error("multisig_confirm args");
+const executed = buildContractCall({ ...base, contract: "multisig", method: "multisig_execute", id: bytesToHex(msId), txId: 3n });
+if (executed.method !== "multisig_execute" || bytesToHex(executed.args) !== bytesToHex(confirmed.args)) throw new Error("multisig_execute args");
+const moved = buildContractCall({ ...base, contract: "token", method: "token_transfer", tokenUnits: 5n });
+if (bytesToHex(moved.args) !== bytesToHex(concat([to, u128le(5n)]))) throw new Error("token_transfer args");
+const minted = buildContractCall({ ...base, contract: "token", method: "token_mint", tokenUnits: 8n });
+if (bytesToHex(minted.args) !== bytesToHex(concat([to, u128le(8n)]))) throw new Error("token_mint args");
+const tokenName = new TextEncoder().encode("A");
+const tokenSymbol = new TextEncoder().encode("B");
+const tokenState = concat([
+  u64le(1n), tokenName,
+  u64le(1n), tokenSymbol,
+  Uint8Array.of(9),
+  u128le(0n),
+  new Uint8Array(32),
+  new Uint8Array(32),
+  u64le(1n),
+  to,
+  u128le(5n),
+  u64le(0n),
+  Uint8Array.of(0),
+  u64le(0n),
+]);
+const decoded = decodeTokenState(tokenState);
+if (!decoded || decoded.name !== "A" || decoded.symbol !== "B" || decoded.decimals !== 9 || decoded.balances.length !== 1 || decoded.balances[0]!.amount !== 5n) {
+  throw new Error("token state decode");
+}
+if (tokenStateSlot() !== bytesToHex(blake3(new TextEncoder().encode("kvnc/v1/state")))) throw new Error("token state slot");
+const htlcBytes = concat([sender, to, u128le(1000n), hashlock, u64le(9n), Uint8Array.of(0), Uint8Array.of(0)]);
+const htlcRecord = decodeHtlc(htlcBytes);
+if (!htlcRecord || htlcRecord.amount !== 1000n || htlcRecord.expiry !== 9n || htlcRecord.claimed || htlcRecord.refunded) throw new Error("htlc record");
+const vaultBytes = concat([sender, to, u128le(5n), u128le(1n), u32le(0), u64le(50n), Uint8Array.of(0)]);
+const vaultRecord = decodeVault(vaultBytes);
+if (!vaultRecord || vaultRecord.total !== 5n || vaultRecord.claimed !== 1n || vaultRecord.schedule !== "absolute 50" || vaultRecord.cancelled) throw new Error("vault record");
 
 const contractKey = new Uint8Array(32).fill(0x33);
 const callTx = {
   sender,
   nonce: 1n,
   fee: 10n,
-  kind: { type: "call" as const, contract: contractKey, value: 0n, method: "withdraw", args: withdraw.args, gasLimit: 100000n },
+  kind: { type: "call" as const, contract: contractKey, value: 0n, method: "htlc_refund", args: refunded.args, gasLimit: 100000n },
 };
-const methodBytes = new TextEncoder().encode("withdraw");
+const methodBytes = new TextEncoder().encode("htlc_refund");
 const kindBytes = concat([
   Uint8Array.of(4),
   contractKey,
   u64le(0n),
   u64le(BigInt(methodBytes.length)),
   methodBytes,
-  u64le(BigInt(withdraw.args.length)),
-  withdraw.args,
+  u64le(BigInt(refunded.args.length)),
+  refunded.args,
   u64le(100000n),
 ]);
 if (kindBytes[0] !== 4) throw new Error("signing kind tag is not 4");
@@ -167,8 +203,8 @@ const airCall = exportUnsigned({
   nonce: "1",
   chainId: 2,
   networkName: "vector",
-  method: "withdraw",
-  argsHex: bytesToHex(withdraw.args),
+  method: "htlc_refund",
+  argsHex: bytesToHex(refunded.args),
   valueAtoms: "0",
   gasLimit: "100000",
   pathLabel: "vector",

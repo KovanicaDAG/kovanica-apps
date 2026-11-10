@@ -122,6 +122,89 @@
             </label>
             <button id="send-transfer" type="button" disabled>Send</button>
           </div>
+
+          <section id="contract-panel" aria-labelledby="contracts-heading">
+            <h3 id="contracts-heading">Contracts</h3>
+            <p class="muted">Canonical WASM calls. Nothing is signed until you confirm the method, arguments, fee, and gas.</p>
+            <label for="contract-kind">Contract</label>
+            <select id="contract-kind">
+              <option value="token">Token</option>
+              <option value="htlc">HTLC</option>
+              <option value="vault">Vault</option>
+              <option value="multisig">Multisig</option>
+            </select>
+            <label for="contract-action">Action</label>
+            <select id="contract-action"></select>
+            <p id="contract-method" class="muted"></p>
+            <label for="contract-address">Contract address</label>
+            <input id="contract-address" type="text" spellcheck="false" autocomplete="off" />
+            <div id="field-owner">
+              <label for="contract-owner">Owner</label>
+              <input id="contract-owner" type="text" spellcheck="false" autocomplete="off" />
+            </div>
+            <div id="field-recipient">
+              <label for="contract-recipient">Recipient</label>
+              <input id="contract-recipient" type="text" spellcheck="false" autocomplete="off" />
+            </div>
+            <div id="field-amount">
+              <label for="contract-amount">Amount (atoms)</label>
+              <input id="contract-amount" type="text" inputmode="numeric" spellcheck="false" autocomplete="off" />
+            </div>
+            <div id="field-hash">
+              <label for="contract-hash">Hash (32-byte hex)</label>
+              <input id="contract-hash" type="text" spellcheck="false" autocomplete="off" />
+            </div>
+            <div id="field-timelock">
+              <label for="contract-timelock">Timelock (unix ms)</label>
+              <input id="contract-timelock" type="text" inputmode="numeric" spellcheck="false" autocomplete="off" />
+            </div>
+            <div id="field-secret">
+              <label for="contract-secret">Secret (hex or text)</label>
+              <input id="contract-secret" type="text" spellcheck="false" autocomplete="off" />
+            </div>
+            <div id="field-record">
+              <label for="contract-record">Record id (32-byte hex)</label>
+              <input id="contract-record" type="text" spellcheck="false" autocomplete="off" />
+            </div>
+            <div id="field-proposal">
+              <label for="contract-proposal">Proposal id</label>
+              <input id="contract-proposal" type="text" inputmode="numeric" spellcheck="false" autocomplete="off" />
+            </div>
+            <div id="field-data">
+              <label for="contract-data">Call data hex, optional</label>
+              <input id="contract-data" type="text" spellcheck="false" autocomplete="off" />
+            </div>
+            <div id="field-value">
+              <label for="contract-value">Attached value (atoms)</label>
+              <input id="contract-value" type="text" value="0" spellcheck="false" autocomplete="off" />
+              <label for="contract-gas">Gas limit</label>
+              <input id="contract-gas" type="text" value="100000" spellcheck="false" autocomplete="off" />
+            </div>
+            <p id="contract-hint" class="muted"></p>
+            <p id="contract-error" class="error" role="alert" hidden></p>
+            <p id="contract-readout" class="muted"></p>
+            <div class="row">
+              <button id="contract-review" type="button">Review call</button>
+              <button id="contract-read" type="button">Read</button>
+            </div>
+            <div id="contract-review-box" hidden>
+              <h3>Review contract call</h3>
+              <dl id="contract-rows" class="readout"></dl>
+              <label id="contract-mainnet-label" class="check" hidden>
+                <input id="contract-mainnet" type="checkbox" />
+                I confirm this call on chain 1.
+              </label>
+              <div class="row">
+                <button id="contract-sign" type="button">Confirm & Sign</button>
+                <button id="contract-copy" type="button">Copy unsigned JSON</button>
+              </div>
+              <label for="contract-signed">Signed air-gap JSON</label>
+              <textarea id="contract-signed" rows="4" spellcheck="false"></textarea>
+              <button id="contract-import" type="button">Broadcast signed JSON</button>
+              <p id="contract-status" class="muted"></p>
+            </div>
+          </section>
+
           <h3 id="history-heading">History (reported by node)</h3>
           <p id="history-empty" class="muted">No transfers reported by the node.</p>
           <ul id="history" class="history"></ul>

@@ -11,6 +11,7 @@ const RPC_METHODS = new Set([
   "kovanica_getTransaction",
   "kovanica_blockNumber",
   "kovanica_getStorage",
+  "kovanica_getStorageAt",
   "kovanica_call",
   "kovanica_getDagInfo",
   "kovanica_getBlockTemplate",

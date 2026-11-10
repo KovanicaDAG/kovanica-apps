@@ -5,6 +5,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+import { mountContracts } from "./contracts-panel";
+
 import {
   EMPTY_HISTORY,
   HISTORY_HEADING,
@@ -671,4 +673,5 @@ export function mountWallet(shownChainId: () => string | null): void {
   }, 1000);
 
   void refreshStatus().catch((error: unknown) => showError(messageFrom(error)));
+  mountContracts(shownChainId);
 }

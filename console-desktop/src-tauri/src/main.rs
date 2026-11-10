@@ -627,6 +627,68 @@ fn wallet_export_backup(app: tauri::AppHandle) -> Result<String, String> {
     Ok(serde_json::json!({ "version": 1, "keystore": keystore }).to_string())
 }
 
+
+/// Nonce and fee for a reviewed contract call. This does not sign.
+#[tauri::command]
+async fn wallet_call_quote(app: tauri::AppHandle) -> Result<transfer::CallQuote, String> {
+    let url = current_url(&app)?;
+    let path = wallet_file(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let rpc = HttpRpc::new(url.clone()).map_err(|err| err.to_string())?;
+        let wallet = app.state::<WalletApp>();
+        let address = with_wallet(&wallet, |store| {
+            store
+                .status(&path, Instant::now())?
+                .address
+                .ok_or_else(|| "Create or import a wallet first.".to_string())
+        })?;
+        transfer::quote_call(&rpc, &url, &address)
+    })
+    .await
+    .map_err(|_| "The quote was interrupted.".to_string())?
+}
+
+/// Submit a raw transaction the user already reviewed and signed.
+#[tauri::command]
+async fn wallet_broadcast_raw(app: tauri::AppHandle, raw: String) -> Result<String, String> {
+    let url = current_url(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let rpc = HttpRpc::new(url).map_err(|err| err.to_string())?;
+        transfer::broadcast_raw(&rpc, &raw)
+    })
+    .await
+    .map_err(|_| "The broadcast was interrupted.".to_string())?
+}
+
+/// Read one contract storage slot. The slot is a 32-byte hex key.
+#[tauri::command]
+async fn wallet_storage_at(
+    app: tauri::AppHandle,
+    address: String,
+    slot: String,
+) -> Result<Option<String>, String> {
+    if address.trim().is_empty() || address.len() > 120 {
+        return Err("Enter a contract address.".to_string());
+    }
+    let slot_trim = slot.trim();
+    let body = slot_trim
+        .strip_prefix("0x")
+        .or_else(|| slot_trim.strip_prefix("0X"))
+        .unwrap_or(slot_trim);
+    if body.len() != 64 || !body.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("Storage slot must be 32 bytes of hex.".to_string());
+    }
+    let slot_hex = format!("0x{}", body.to_ascii_lowercase());
+    let url = current_url(&app)?;
+    let address = address.trim().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let rpc = HttpRpc::new(url).map_err(|err| err.to_string())?;
+        transfer::storage_at(&rpc, &address, &slot_hex)
+    })
+    .await
+    .map_err(|_| "The storage read was interrupted.".to_string())?
+}
+
 /// Chain id, height, leader round, epoch, and peers. Fails with a clear error
 /// when the node cannot be reached.
 #[tauri::command]
@@ -700,7 +762,10 @@ fn main() {
             wallet_history,
             wallet_request_airdrop,
             wallet_faucet_chain,
-            wallet_export_backup
+            wallet_export_backup,
+            wallet_call_quote,
+            wallet_broadcast_raw,
+            wallet_storage_at
         ])
         .run(tauri::generate_context!())
         .expect("error while running Kovanica Console");
