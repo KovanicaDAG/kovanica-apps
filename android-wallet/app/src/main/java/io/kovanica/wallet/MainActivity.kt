@@ -43,6 +43,7 @@ import uniffi.kovanica_light.confirmAccount
 import uniffi.kovanica_light.createHdWallet
 import uniffi.kovanica_light.createWallet
 import uniffi.kovanica_light.deriveAccount
+import uniffi.kovanica_light.CreatedWallet
 import uniffi.kovanica_light.faucetAllowed
 import uniffi.kovanica_light.importHdWallet
 import uniffi.kovanica_light.importWallet
@@ -81,6 +82,9 @@ class MainActivity : Activity() {
     private lateinit var nodeMeta: TextView
     private lateinit var wifiToggle: Button
     private lateinit var fallbackButton: Button
+    private lateinit var claimButton: Button
+    private var pendingCreate: CreatedWallet? = null
+    private var pendingHd: Boolean = true
     private var stopNodeListen: () -> Unit = {}
     private val nodeUpdates = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -584,20 +588,18 @@ class MainActivity : Activity() {
             label = "Creating HD wallet ($wordCount words) — this takes a few seconds…",
             done = { line ->
                 pushStatus(line)
-                onWalletChanged()
-                if (line.tone == Tone.OK) showTab(Tab.WALLET)
+                val created = pendingCreate
+                if (line.tone == Tone.OK && created != null) {
+                    confirmSeed(created)
+                }
             },
         ) { _ ->
             val created = createHdWallet(wordCount, passphrase)
-            prefs().edit()
-                .putString("keystore", created.keystoreJson)
-                .putBoolean("is_hd", true)
-                .putInt("hd_account_index", 0)
-                .putString("hd_active_address", created.address)
-                .apply()
+            pendingCreate = created
+            pendingHd = true
             ok(
-                "HD wallet created (m/44'/3007'/0'/0'/0').\naddress ${created.address}\n" +
-                    "seed words (shown once, write them down):\n${created.mnemonic}",
+                "Write these words down, then confirm three of them.\n" +
+                    "HD wallet (m/44'/3007'/0'/0'/0').\naddress ${created.address}",
             )
         }
     }
@@ -608,19 +610,18 @@ class MainActivity : Activity() {
             label = "Creating wallet — this takes a few seconds…",
             done = { line ->
                 pushStatus(line)
-                onWalletChanged()
-                if (line.tone == Tone.OK) showTab(Tab.WALLET)
+                val created = pendingCreate
+                if (line.tone == Tone.OK && created != null) {
+                    confirmSeed(created)
+                }
             },
         ) { _ ->
             val created = createWallet(passphrase)
-            prefs().edit()
-                .putString("keystore", created.keystoreJson)
-                .putBoolean("is_hd", false)
-                .remove("hd_active_address")
-                .apply()
+            pendingCreate = created
+            pendingHd = false
             ok(
-                "Wallet created.\naddress ${created.address}\n" +
-                    "seed words (shown once, write them down):\n${created.mnemonic}",
+                "Write these words down, then confirm three of them.\n" +
+                    "address ${created.address}",
             )
         }
     }
@@ -669,8 +670,7 @@ class MainActivity : Activity() {
             label = "Deriving HD account $accountIndex…",
             done = { line ->
                 pushStatus(line)
-                onWalletChanged()
-                if (line.tone == Tone.OK) showTab(Tab.WALLET)
+                if (line.tone == Tone.OK) onWalletChanged()
             },
         ) { _ ->
             val keystore = keystore()
@@ -904,6 +904,107 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun confirmSeed(created: CreatedWallet) {
+        val words = created.mnemonic.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        val spots = SeedCheck.positions(words.size)
+        val column = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), dp(0))
+        }
+        val phraseView = TextView(this).apply {
+            text = words.mapIndexed { index, word -> "${index + 1}.  $word" }.joinToString("\n")
+            typeface = Typeface.MONOSPACE
+            textSize = 16f
+            setTextColor(TEXT)
+            setLineSpacing(0f, 1.35f)
+        }
+        column.addView(phraseView)
+        val fields = mutableListOf<EditText>()
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Write down your seed")
+            .setMessage("The wallet is not saved until you confirm three words.")
+            .setView(column)
+            .setNegativeButton("Cancel") { _, _ ->
+                pendingCreate = null
+                setStatus("Wallet was not saved.", Tone.WARN)
+            }
+            .setPositiveButton("I wrote them down", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                if (phraseView.visibility == View.VISIBLE) {
+                    phraseView.visibility = View.GONE
+                    dialog.setTitle("Confirm your seed")
+                    dialog.setMessage("Select word ${spots.joinToString(", ") { "#$it" }}.")
+                    fields += spots.map { position ->
+                        EditText(this).apply {
+                            hint = "Word #$position"
+                            setSingleLine(true)
+                            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                        }.also { column.addView(it) }
+                    }
+                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).text = "Confirm"
+                    return@setOnClickListener
+                }
+                val answers = fields.map { it.text.toString() }
+                if (!SeedCheck.matches(created.mnemonic, answers)) {
+                    Toast.makeText(this, "Those words do not match.", Toast.LENGTH_LONG).show()
+                    return@setOnClickListener
+                }
+                val editor = prefs().edit()
+                    .putString("keystore", created.keystoreJson)
+                    .putBoolean("is_hd", pendingHd)
+                    .putInt("hd_account_index", 0)
+                if (pendingHd) editor.putString("hd_active_address", created.address) else editor.remove("hd_active_address")
+                editor.apply()
+                pendingCreate = null
+                dialog.dismiss()
+                onWalletChanged()
+                showTab(Tab.WALLET)
+                Toast.makeText(this, "Wallet saved.", Toast.LENGTH_SHORT).show()
+            }
+        }
+        dialog.show()
+    }
+
+    private fun claimFaucet() {
+        if (!FaucetClaim.allowed(chainIdField().toLong())) {
+            Toast.makeText(this, "This chain has no testnet faucet.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val until = getSharedPreferences(NetworkPrefs.PREFS, MODE_PRIVATE).getLong("faucet_until", 0L)
+        val left = FaucetClaim.remaining(System.currentTimeMillis(), until)
+        if (left > 0L) {
+            Toast.makeText(this, "Claim again in ${left / 1000}s.", Toast.LENGTH_LONG).show()
+            return
+        }
+        background(
+            label = "Requesting testnet KVNC…",
+            done = { line ->
+                pushStatus(line)
+                if (line.tone == Tone.OK) {
+                    Toast.makeText(this, "Testnet KVNC requested.", Toast.LENGTH_LONG).show()
+                    refreshWallet()
+                }
+            },
+        ) { env ->
+            val address = activeWalletAddress(keystore())
+            val result = client(env).call(
+                "kovanica_requestAirdrop",
+                JSONArray().put(address).put(FaucetClaim.ATOMS),
+            )
+            val hash = HistoryStore.extractTxHash(result?.toString() ?: "")
+            getSharedPreferences(NetworkPrefs.PREFS, MODE_PRIVATE)
+                .edit()
+                .putLong("faucet_until", System.currentTimeMillis() + FaucetClaim.COOLDOWN_MS)
+                .apply()
+            if (hash != null) {
+                record(kind = HistoryEntry.KIND_FAUCET, hash = hash, amount = "100", symbol = "KVNC", to = "faucet")
+            }
+            ok(if (hash != null) "Faucet sent — $hash" else "Faucet answered: $result")
+        }
+    }
+
     private fun faucet() {
         background("Requesting faucet…") { env ->
             val address = activeWalletAddress(keystore())
@@ -979,6 +1080,9 @@ class MainActivity : Activity() {
             },
         )
         addStack(actions, 14)
+        claimButton = button("Request Testnet KVNC", filled = false) { claimFaucet() }
+        claimButton.visibility = View.GONE
+        addStack(claimButton, 8)
         addStack(
             caption("Native KUNA from the node you selected. Tokens are listed below."),
             12,
@@ -1919,6 +2023,9 @@ class MainActivity : Activity() {
         val probe = StartupNative.faucetAllowed(configured) { faucetAllowed(chainIdField()) }
         nativeFailure = probe.failure
         faucetButton.visibility = if (probe.allowed) View.VISIBLE else View.GONE
+        if (::claimButton.isInitialized) {
+            claimButton.visibility = if (FaucetClaim.allowed(chainIdField().toLong())) View.VISIBLE else View.GONE
+        }
         faucetField.isEnabled = current.faucetUrl != null
         faucetRow.visibility = if (current.faucetUrl == null) View.GONE else View.VISIBLE
     }

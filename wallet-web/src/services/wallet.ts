@@ -115,7 +115,7 @@ export async function createHdWallet(phrase: string, password: string): Promise<
   useSession.getState().setUnlocked(file.accounts, 0);
 }
 
-export async function createDesktopWallet(words: 12 | 24, password: string): Promise<void> {
+export async function createDesktopWallet(words: 12 | 24, password: string): Promise<string> {
   if (!isDesktopShell()) throw new Error("desktop signer is not available");
   requirePassword(password);
   const created = await tauriInvoke<{ address: string; mnemonic: string }>("wallet_create_hd", {
@@ -130,8 +130,9 @@ export async function createDesktopWallet(words: 12 | 24, password: string): Pro
     accounts: [publicAccount("hd", 0, created.address)],
   };
   saveDesktopMeta(meta);
-  useSession.getState().openSession({ ...meta, active: 0 });
-  setBackup(created.mnemonic);
+  await tauriInvoke("wallet_lock").catch(() => undefined);
+  lockUi();
+  return created.mnemonic;
 }
 
 export async function importWallet(input: {

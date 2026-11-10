@@ -16,6 +16,7 @@ const RPC_METHODS = new Set([
   "kovanica_getBlockTemplate",
   "kovanica_getBlockByRound",
   "kovanica_getLeaderHeader",
+  "kovanica_requestAirdrop",
 ]);
 
 type RpcInput = { rpcUrl: string; method: string; params: unknown[] };

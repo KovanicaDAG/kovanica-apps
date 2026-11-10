@@ -107,6 +107,23 @@ export async function readAccount(rpcUrl: string, address: string): Promise<{ ba
   return { balance, nonce, fee };
 }
 
+export async function requestAirdrop(rpcUrl: string, address: string, atoms = "100000000000"): Promise<string> {
+  let last = "faucet failed";
+  for (const candidate of withRpcPath(rpcUrl)) {
+    try {
+      const result = await post(candidate, "kovanica_requestAirdrop", [address, atoms]);
+      if (typeof result === "string" && result.trim()) return result.replace(/^0x/, "");
+      const record = asRecord(result);
+      const hash = record?.hash ?? record?.txHash ?? record?.transactionHash;
+      if (typeof hash === "string" && hash.trim()) return hash.replace(/^0x/, "");
+      throw new Error("The faucet did not return a transaction hash");
+    } catch (error) {
+      last = error instanceof Error ? error.message : last;
+    }
+  }
+  throw new Error(last);
+}
+
 export async function broadcast(rpcUrl: string, rawHex: string): Promise<string> {
   let last = "broadcast failed";
   for (const candidate of withRpcPath(rpcUrl)) {

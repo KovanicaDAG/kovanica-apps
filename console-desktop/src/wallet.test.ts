@@ -28,6 +28,10 @@ import {
   reviewRows,
   secretsCleared,
   sendEnabled,
+  quizPositions,
+  quizChoices,
+  quizAnswerMatches,
+  faucetChainAllowed,
   type QuoteView,
 } from "./wallet";
 import walletSource from "./wallet.ts?raw";
@@ -286,6 +290,27 @@ describe("wallet form", () => {
     expect(handler.indexOf("clearedImportFields()")).toBeGreaterThan(finallyAt);
     expect(handler.includes('importPhrase.value = ""')).toBe(false);
     expect(handler.includes('importPassword.value = ""')).toBe(false);
+  });
+
+  it("asks for three seed words and keeps the faucet off mainnet", () => {
+    expect(quizPositions(24)).toEqual([3, 8, 14]);
+    expect(quizPositions(12)).toEqual([3, 8, 12]);
+    const words = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"];
+    expect(quizChoices(words, 3)).toContain("charlie");
+    const answers = new Map<number, string>([
+      [3, "c"],
+      [8, "h"],
+      [12, "l"],
+    ]);
+    const phrase = "a b c d e f g h i j k l";
+    expect(quizAnswerMatches(phrase, answers)).toBe(true);
+    expect(quizAnswerMatches(phrase, new Map([[3, "nope"], [8, "h"], [12, "l"]]))).toBe(false);
+    expect(faucetChainAllowed("5")).toBe(true);
+    expect(faucetChainAllowed("3")).toBe(true);
+    expect(faucetChainAllowed("1337")).toBe(true);
+    expect(faucetChainAllowed("1")).toBe(false);
+    expect(faucetChainAllowed("4")).toBe(false);
+    expect(faucetChainAllowed(null)).toBe(false);
   });
 
   it("labels unproven figures and does not keep secrets in the page", () => {

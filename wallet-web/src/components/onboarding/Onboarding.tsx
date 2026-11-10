@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { generatePhrase, isValidMnemonic, mnemonicWordCount, normalizeMnemonic, suggestWords } from "@/core/hd";
+import { quizChoices, quizMatches, quizPositions } from "@/core/quiz";
 import { createDesktopWallet, createHdWallet, importWallet, isDesktopShell, unlock } from "@/services/wallet";
 import { useSession } from "@/stores/session";
 
@@ -16,13 +17,14 @@ export function Onboarding({ mode }: { mode: Mode }) {
   const [again, setAgain] = useState("");
   const [bip39, setBip39] = useState("");
   const [importMode, setImportMode] = useState<"hd" | "legacy" | null>(null);
-  const [check, setCheck] = useState("");
+  const [check, setCheck] = useState<Record<number, string>>({});
+  const [stage, setStage] = useState<"write" | "quiz">("write");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [suggest, setSuggest] = useState<string[]>([]);
 
   const list = useMemo(() => normalizeMnemonic(phrase).split(" ").filter(Boolean), [phrase]);
-  const quizIndex = list.length > 2 ? 3 : 1;
+  const positions = quizPositions(list.length);
   const valid = isValidMnemonic(phrase);
   const count = mnemonicWordCount(phrase);
 
@@ -32,30 +34,49 @@ export function Onboarding({ mode }: { mode: Mode }) {
     setError(null);
     if (password.length < 8) return setError("Password must be at least 8 characters.");
     if (password !== again) return setError("Passwords do not match.");
+    if (!quizMatches(list, check)) return setError("Those words do not match the phrase.");
     if (desktop) {
       setBusy(true);
       try {
-        await createDesktopWallet(words, password);
+        await unlock(password, "");
+        setPhrase("");
         setPassword("");
         setAgain("");
+        setCheck({});
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Could not create the wallet");
+        setError(err instanceof Error ? err.message : "Could not unlock the wallet");
       } finally {
         setBusy(false);
       }
       return;
     }
     if (!valid) return setError("The phrase checksum does not match.");
-    if (list[quizIndex - 1] !== check.trim().toLowerCase()) return setError(`Word ${quizIndex} does not match.`);
     setBusy(true);
     try {
       await createHdWallet(phrase, password);
       setPhrase("");
       setPassword("");
       setAgain("");
-      setCheck("");
+      setCheck({});
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not seal the wallet");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function prepareDesktop() {
+    setError(null);
+    if (password.length < 8) return setError("Password must be at least 8 characters.");
+    if (password !== again) return setError("Passwords do not match.");
+    setBusy(true);
+    try {
+      const mnemonic = await createDesktopWallet(words, password);
+      setPhrase(mnemonic);
+      setStage("write");
+      setCheck({});
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create the wallet");
     } finally {
       setBusy(false);
     }
@@ -139,12 +160,12 @@ export function Onboarding({ mode }: { mode: Mode }) {
         <div className="mt-8 grid gap-4">
           <div className="flex gap-2">
             {([12, 24] as const).map((n) => (
-              <button key={n} type="button" className={`min-h-11 flex-1 rounded-full border ${words === n ? "border-copper text-copper" : "border-line text-muted"}`} onClick={() => { setWords(n); if (!desktop) { setPhrase(generatePhrase(n)); setCheck(""); } }}>
+              <button key={n} type="button" className={`min-h-11 flex-1 rounded-full border ${words === n ? "border-copper text-copper" : "border-line text-muted"}`} onClick={() => { setWords(n); setStage("write"); setCheck({}); if (desktop) setPhrase(""); else setPhrase(generatePhrase(n)); }}>
                 {n} words
               </button>
             ))}
           </div>
-          <ol className={`grid grid-cols-2 gap-2 sm:grid-cols-3 ${desktop ? "hidden" : ""}`}>
+          <ol className={`grid grid-cols-2 gap-2 sm:grid-cols-3 ${stage === "quiz" || (desktop && !phrase) ? "hidden" : ""}`}>
             {normalizeMnemonic(phrase).split(" ").filter(Boolean).map((word, i) => (
               <li key={`${word}-${i}`} className="rounded-xl border border-line bg-surface px-3 py-2 text-sm">
                 <span className="mr-2 text-muted">{i + 1}</span>
@@ -152,13 +173,29 @@ export function Onboarding({ mode }: { mode: Mode }) {
               </li>
             ))}
           </ol>
-          {desktop ? <p className="text-sm text-muted">The desktop signer creates the phrase. It is shown once, then cleared when the wallet locks.</p> : null}
-          {desktop ? null : (
-          <label className="grid gap-1 text-sm text-muted">
-            Confirm word {quizIndex}
-            <input className="min-h-11 rounded-2xl border border-line bg-ink px-4 text-paper" value={check} onChange={(e) => setCheck(e.target.value)} autoComplete="off" />
-          </label>
-          )}
+          {desktop && !phrase ? <p className="text-sm text-muted">The desktop signer creates the phrase. It stays hidden until you confirm three words, and the wallet stays locked until then.</p> : null}
+          {stage === "quiz" ? (
+            <div className="grid gap-3">
+              <p className="text-sm text-muted">The phrase is hidden. Select the word that belongs in each position.</p>
+              {positions.map((position) => (
+                <fieldset key={position} className="grid gap-2">
+                  <legend className="text-sm text-muted">Word #{position}</legend>
+                  <div className="flex flex-wrap gap-2">
+                    {quizChoices(list, position).map((choice) => (
+                      <button key={choice} type="button" className={`min-h-11 rounded-full border px-3 text-sm ${check[position] === choice ? "border-copper text-copper" : "border-line text-paper"}`} onClick={() => setCheck((prev) => ({ ...prev, [position]: choice }))}>
+                        {choice}
+                      </button>
+                    ))}
+                  </div>
+                </fieldset>
+              ))}
+            </div>
+          ) : null}
+          {stage === "write" && !(desktop && !phrase) ? (
+            <button type="button" className="min-h-11 rounded-full border border-line text-paper" onClick={() => { setCheck({}); setStage("quiz"); }}>
+              I wrote them down
+            </button>
+          ) : null}
           <label className="grid gap-1 text-sm text-muted">
             Password
             <input className="min-h-11 rounded-2xl border border-line bg-ink px-4 text-paper" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
@@ -167,10 +204,10 @@ export function Onboarding({ mode }: { mode: Mode }) {
             Repeat password
             <input className="min-h-11 rounded-2xl border border-line bg-ink px-4 text-paper" type="password" value={again} onChange={(e) => setAgain(e.target.value)} autoComplete="new-password" />
           </label>
-          <button type="button" className="min-h-12 rounded-full bg-copper font-medium text-copper-ink disabled:opacity-40" disabled={busy} onClick={() => void sealCreate()}>
-            {busy ? "Sealing keystore…" : "Save wallet"}
+          <button type="button" className="min-h-12 rounded-full bg-copper font-medium text-copper-ink disabled:opacity-40" disabled={busy || (stage !== "quiz" && !(desktop && !phrase))} onClick={() => void (desktop && !phrase ? prepareDesktop() : sealCreate())}>
+            {busy ? "Sealing keystore…" : desktop && !phrase ? "Create phrase" : desktop ? "Unlock wallet" : "Save wallet"}
           </button>
-          <button type="button" className="min-h-11 text-muted" onClick={() => setScreen("choose")}>Back</button>
+          <button type="button" className="min-h-11 text-muted" onClick={() => { setPhrase(""); setCheck({}); setStage("write"); setScreen("choose"); }}>Back</button>
         </div>
       ) : null}
 

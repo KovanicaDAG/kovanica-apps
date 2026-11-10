@@ -258,6 +258,41 @@ pub fn pinned_committees() -> &'static [PinnedCommittee] {
     &[]
 }
 
+/// Chain ids that may receive `kovanica_requestAirdrop`. Mainnet is never included.
+pub fn faucet_chain_allowed(chain_id: &str) -> bool {
+    matches!(chain_id, "3" | "5" | "1337")
+}
+
+/// Hash from a string result or an object carrying `hash`, `txHash`, or `transactionHash`.
+pub fn airdrop_hash(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(text) if !text.trim().is_empty() => {
+            Some(text.trim().trim_start_matches("0x").to_string())
+        }
+        serde_json::Value::Object(map) => ["hash", "txHash", "transactionHash"]
+            .iter()
+            .find_map(|key| {
+                map.get(*key)
+                    .and_then(|item| item.as_str())
+                    .filter(|text| !text.trim().is_empty())
+                    .map(|text| text.trim().trim_start_matches("0x").to_string())
+            }),
+        _ => None,
+    }
+}
+
+/// Proven chain wins. An unproven node can still be a faucet when sync status
+/// reports chain 3, 5, or 1337. A proven other chain never falls through.
+pub fn faucet_chain_id(proven: Option<&str>, sync: &Value) -> Option<String> {
+    if let Some(id) = proven {
+        return faucet_chain_allowed(id).then(|| id.to_string());
+    }
+    reported_chain_id(sync).and_then(|id| {
+        let text = id.to_string();
+        faucet_chain_allowed(&text).then_some(text)
+    })
+}
+
 /// Read chain id, height, leader round, epoch, and peers.
 ///
 /// Chain id is set only when [`pinned_committees`] contains this chain and
@@ -877,6 +912,34 @@ mod tests {
         PublicKey, Signature, SigningKey, StatementBlock,
     };
     use serde_json::json;
+
+    #[test]
+    fn faucet_allows_devnet_hybrid_and_local_only() {
+        assert!(faucet_chain_allowed("5"));
+        assert!(faucet_chain_allowed("3"));
+        assert!(faucet_chain_allowed("1337"));
+        assert!(!faucet_chain_allowed("1"));
+        assert!(!faucet_chain_allowed("4"));
+        assert_eq!(
+            airdrop_hash(&json!("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string())
+        );
+        assert_eq!(
+            airdrop_hash(&json!({"txHash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"})),
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string())
+        );
+        assert_eq!(airdrop_hash(&json!({})), None);
+        assert_eq!(faucet_chain_id(Some("1"), &json!({"chainId": 5})), None);
+        assert_eq!(
+            faucet_chain_id(Some("5"), &json!({})).as_deref(),
+            Some("5")
+        );
+        assert_eq!(
+            faucet_chain_id(None, &json!({"chain_id": "1337"})).as_deref(),
+            Some("1337")
+        );
+        assert_eq!(faucet_chain_id(None, &json!({"chainId": 4})), None);
+    }
 
     #[test]
     fn package_version_is_the_console_preview() {

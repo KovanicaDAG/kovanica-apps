@@ -1,6 +1,7 @@
 package io.kovanica.wallet
 
 import android.app.Activity
+import android.content.Intent
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
@@ -14,6 +15,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import uniffi.kovanica_light.changePassphraseRaw
 import uniffi.kovanica_light.revealMnemonicRaw
+import org.json.JSONObject
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
@@ -158,6 +160,28 @@ class SettingsActivity : Activity() {
         }
         hideButton.visibility = View.GONE
         addStack(hideButton, 10)
+        addStack(
+            WalletUi.button(this@SettingsActivity, "Export Encrypted Backup (JSON)", filled = false) {
+                exportBackup()
+            },
+            10,
+        )
+    }
+
+    /** Share the encrypted keystore. The recovery phrase is not in the file. */
+    private fun exportBackup() {
+        val raw = keystoreOrNull()
+        if (raw.isNullOrBlank()) {
+            setStatus("Create or import a wallet first — there's no encrypted backup yet.", Tone.WARN)
+            return
+        }
+        val body = JSONObject().put("version", 1).put("keystore", raw).toString()
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "application/json"
+            putExtra(Intent.EXTRA_SUBJECT, "kovanica-wallet-backup.json")
+            putExtra(Intent.EXTRA_TEXT, body)
+        }
+        startActivity(Intent.createChooser(send, "Export Encrypted Backup (JSON)"))
     }
 
     /**

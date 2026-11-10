@@ -197,3 +197,41 @@ export function reviewRows(quote: QuoteView): ReviewRow[] {
 export function needsMainnetConfirm(chainId: string): boolean {
   return chainId === "1";
 }
+
+/** 100 KVNC, in atoms. KVNC has 9 decimals. */
+export const FAUCET_ATOMS = "100000000000";
+
+/** Local cooldown between testnet faucet claims. */
+export const FAUCET_COOLDOWN_MS = 60_000;
+
+/** Chain 5, devnet 3, and local 1337. Mainnet and chain 4 are not included. */
+export function faucetChainAllowed(chainId: string | null): boolean {
+  return chainId === "3" || chainId === "5" || chainId === "1337";
+}
+
+/** 1-based positions. 24-word phrases use 3, 8, and 14. */
+export function quizPositions(count: number): number[] {
+  if (count >= 14) return [3, 8, 14];
+  if (count >= 12) return [3, 8, 12];
+  return [1, Math.min(2, count), count].filter((value, index, all) => all.indexOf(value) === index);
+}
+
+/** The right word plus up to three others, sorted so the answer is not in a fixed slot. */
+export function quizChoices(words: readonly string[], position: number): string[] {
+  const correct = words[position - 1] ?? "";
+  const picked = [correct];
+  for (const word of words) {
+    if (picked.length >= 4) break;
+    if (word !== correct && !picked.includes(word)) picked.push(word);
+  }
+  return picked.sort((left, right) => left.localeCompare(right));
+}
+
+export function quizAnswerMatches(phrase: string, answers: ReadonlyMap<number, string>): boolean {
+  const words = phrase.trim().split(/\s+/).filter((word) => word.length > 0);
+  return quizPositions(words.length).every((position) => {
+    const expected = words[position - 1] ?? "";
+    const given = answers.get(position) ?? "";
+    return expected.length > 0 && given.trim().toLowerCase() === expected.toLowerCase();
+  });
+}
