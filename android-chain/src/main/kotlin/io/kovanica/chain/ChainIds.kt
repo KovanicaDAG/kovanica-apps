@@ -13,6 +13,7 @@ object ChainIds {
     const val CHAIN_4: Long = 4
     const val TESTNET_V2: Long = 4
     const val TESTNET: Long = 4
+    const val HYBRID: Long = 5
     const val LOCAL: Long = 1337
 
     /** No chain was configured. Legacy hex stays refused. */

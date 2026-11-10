@@ -4,8 +4,10 @@ import android.Manifest
 import android.app.Activity
 import android.app.ActivityManager
 import android.app.AlertDialog
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
@@ -17,6 +19,9 @@ import android.os.Build
 import android.os.Bundle
 import android.text.Editable
 import android.text.InputType
+import android.text.Spannable
+import android.text.SpannableString
+import android.text.style.ForegroundColorSpan
 import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
@@ -30,6 +35,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
+import android.widget.Toast
 import io.kovanica.chain.ChainIds
 import org.json.JSONArray
 import org.json.JSONObject
@@ -73,7 +79,14 @@ class MainActivity : Activity() {
     private lateinit var chainMeta: TextView
     private lateinit var nodePhase: TextView
     private lateinit var nodeMeta: TextView
+    private lateinit var wifiToggle: Button
+    private lateinit var fallbackButton: Button
     private var stopNodeListen: () -> Unit = {}
+    private val nodeUpdates = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            renderNode(NodeRuntime.snapshot)
+        }
+    }
     private lateinit var rpcField: EditText
     private lateinit var chainField: EditText
     private lateinit var epochField: EditText
@@ -241,6 +254,9 @@ class MainActivity : Activity() {
             chainMeta = monoValue("").apply { setTextColor(MUTED) }
             addStack(chainMeta, 8)
             addStack(button("Check connection") { checkConnection() }, 14)
+            fallbackButton = button("Use rpc-testnet.kovanica.online", filled = false) { applyNetwork(Networks.TESTNET) }
+            fallbackButton.visibility = View.GONE
+            addStack(fallbackButton, 8)
             addStack(button("Sync sealed header", filled = false) { sync() }, 10)
             addStack(button("Verified balance", filled = false) { balance() }, 10)
             addStack(
@@ -373,6 +389,18 @@ class MainActivity : Activity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        val filter = IntentFilter(NodeRuntime.ACTION_UPDATED)
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(nodeUpdates, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(nodeUpdates, filter)
+        }
+        renderNode(NodeRuntime.snapshot)
+    }
+
     override fun onDestroy() {
         stopNodeListen()
         io.shutdown()
@@ -380,6 +408,7 @@ class MainActivity : Activity() {
     }
 
     override fun onStop() {
+        runCatching { unregisterReceiver(nodeUpdates) }
         super.onStop()
         if (isChangingConfigurations) return
         // Opening History, Settings, or Receive also stops this screen.
@@ -763,6 +792,13 @@ class MainActivity : Activity() {
                 setChainState(line.text.lineSequence().first(), line.tone)
                 chainMeta.text = line.text.lineSequence().drop(1).joinToString("\n").trim()
                     .ifEmpty { chainPreview() }
+                if (::fallbackButton.isInitialized) {
+                    val failed = line.tone == Tone.ERROR
+                    fallbackButton.visibility = if (failed) View.VISIBLE else View.GONE
+                    if (failed) {
+                        Toast.makeText(this, "The node did not respond. Switch to the testnet fallback or edit the host and port.", Toast.LENGTH_LONG).show()
+                    }
+                }
             },
         )
     }
@@ -1793,10 +1829,13 @@ class MainActivity : Activity() {
         nodeMeta = monoValue("").apply { setTextColor(MUTED) }
         addStack(nodeMeta, 8)
         addStack(button("Start node") { startNode() }, 14)
+        addStack(button("Verify now", filled = false) { verifyNow() }, 10)
         addStack(button("Stop node", filled = false) { stopNode() }, 10)
+        wifiToggle = button(wifiLabel(), filled = false) { toggleWifiOnly() }
+        addStack(wifiToggle, 10)
         addStack(
             caption(
-                "Chain 5 headers are checked on this phone. The service pauses on mobile data or while the battery is not charging.",
+                "Chain 5 headers are checked on this phone. Turn Wi-Fi and charging off only if you want those checks on cellular.",
             ),
             12,
         )
@@ -1813,6 +1852,22 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
     }
 
+    private fun verifyNow() {
+        val intent = Intent(this, KovanicaNodeService::class.java)
+            .setAction(KovanicaNodeService.ACTION_VERIFY)
+            .putExtra(KovanicaNodeService.EXTRA_CHAIN_ID, chainIdField().toLong())
+        if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
+    }
+
+    private fun wifiLabel(): String =
+        if (NodePrefs.wifiAndChargingOnly(this)) "Wi-Fi & charging only: On" else "Wi-Fi & charging only: Off"
+
+    private fun toggleWifiOnly() {
+        NodePrefs.setWifiAndChargingOnly(this, !NodePrefs.wifiAndChargingOnly(this))
+        if (::wifiToggle.isInitialized) wifiToggle.text = wifiLabel()
+        if (NodeRuntime.snapshot.phase != NodeRuntime.PHASE_STOPPED) verifyNow()
+    }
+
     private fun stopNode() {
         startService(Intent(this, KovanicaNodeService::class.java).setAction(KovanicaNodeService.ACTION_STOP))
     }
@@ -1820,14 +1875,36 @@ class MainActivity : Activity() {
     private fun renderNode(snapshot: NodeRuntime.Snapshot) {
         if (!::nodePhase.isInitialized) return
         nodePhase.text = snapshot.phase
-        nodeMeta.text = "round ${snapshot.round}  ·  work ${snapshot.work}\n" +
+        val interval = when (snapshot.intervalTone) {
+            "ok", "drift" -> "● ${snapshot.intervalLine}"
+            else -> snapshot.intervalLine
+        }
+        val body = "round ${snapshot.round}  ·  work ${snapshot.work}\n" +
             "cumulative ${snapshot.cumulative}\n" +
             "target_bits ${snapshot.targetBits}\n" +
             "pow ${snapshot.powHash}\n" +
             "GHOSTDAG K=${snapshot.ghostdagK}  ·  target ${snapshot.targetMs} ms\n" +
             "pruning ${snapshot.pruningRounds} rounds  ·  cache ${snapshot.cacheMb} MiB\n" +
             "local RPC ${snapshot.bind}\n" +
+            "${snapshot.pruningBadge}\n" +
+            "Verified headers in window: ${snapshot.headerCount}\n" +
+            "Local DB: ${dbLabel(snapshot.storeBytes, snapshot.cacheMb)}\n" +
+            "${snapshot.peerLine}\n" +
+            interval + "\n" +
             snapshot.note
+        val span = SpannableString(body)
+        val at = body.indexOf(interval)
+        if (at >= 0 && (snapshot.intervalTone == "ok" || snapshot.intervalTone == "drift")) {
+            val color = if (snapshot.intervalTone == "ok") 0xFF7D9A78.toInt() else 0xFFE0B15A.toInt()
+            span.setSpan(ForegroundColorSpan(color), at, at + 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        nodeMeta.text = span
+    }
+
+    private fun dbLabel(bytes: String, limitMb: String): String {
+        val size = bytes.toLongOrNull() ?: 0L
+        val limit = limitMb.toLongOrNull() ?: 64L
+        return AirgapReview.footprint(size, limit)
     }
 
     private fun chainPreview(): String =
@@ -2206,10 +2283,10 @@ class MainActivity : Activity() {
     }
 
     private fun styleNetworkItem(view: TextView, network: Network, dropdown: Boolean) {
-        view.text = if (network.enabled) {
-            "${network.label} · chain ${network.chainId}"
-        } else {
-            "${network.label} — ${network.soon ?: "not open yet"}"
+        view.text = when {
+            !network.enabled -> "${network.label} — ${network.soon ?: "not open yet"}"
+            network.id == "hybrid" -> "Recommended · ${network.label} · chain ${network.chainId}"
+            else -> "${network.label} · chain ${network.chainId}"
         }
         view.setTextColor(if (network.enabled) TEXT else MUTED)
         view.textSize = 15f

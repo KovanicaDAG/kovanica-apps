@@ -40,7 +40,7 @@ object Networks {
     val MAINNET: Network = Network(
         "mainnet", "Mainnet", ChainIds.MAINNET,
         "https://rpc.kovanica.online/rpc", null, enabled = false,
-        soon = "Mainnet is not open yet.",
+        soon = "Frozen. Read-only.",
     )
     val TESTNET: Network = Network(
         "testnet", "Testnet (chain 4)", ChainIds.TESTNET,
@@ -50,12 +50,16 @@ object Networks {
         // faucet button would always fail on a fresh install.
         "https://seed3.kovanica.online/faucet", enabled = true,
     )
+    val HYBRID: Network = Network(
+        "hybrid", "Chain 5 · Hybrid PoW Testnet", ChainIds.HYBRID,
+        "http://10.0.2.2:8545/rpc", null, enabled = true,
+    )
     val LOCAL: Network = Network(
         "local", "Local", ChainIds.LOCAL,
         "http://10.0.2.2:8545/rpc", "http://10.0.2.2:8080/faucet", enabled = true,
     )
 
-    val ALL: List<Network> = listOf(MAINNET, TESTNET, LOCAL)
+    val ALL: List<Network> = listOf(HYBRID, LOCAL, TESTNET, MAINNET)
     val DEFAULT: Network = TESTNET
 
     /** Look up a profile by id; `null` when unknown (including `null`). */

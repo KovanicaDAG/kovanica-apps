@@ -125,15 +125,27 @@ export async function broadcast(rpcUrl: string, rawHex: string): Promise<string>
 }
 
 export async function receipt(rpcUrl: string, hash: string): Promise<{ status: "pending" | "confirmed" | "failed"; height: number | null } | null> {
+  const fromReceipt = await receiptOnce(rpcUrl, hash, "kovanica_getTransactionReceipt");
+  if (fromReceipt && fromReceipt.status !== "pending") return fromReceipt;
+  const fromTx = await receiptOnce(rpcUrl, hash, "kovanica_getTransaction");
+  return fromTx ?? fromReceipt;
+}
+
+async function receiptOnce(
+  rpcUrl: string,
+  hash: string,
+  method: "kovanica_getTransactionReceipt" | "kovanica_getTransaction",
+): Promise<{ status: "pending" | "confirmed" | "failed"; height: number | null } | null> {
   for (const candidate of withRpcPath(rpcUrl)) {
     try {
-      const result = await post(candidate, "kovanica_getTransactionReceipt", [hash]);
+      const result = await post(candidate, method, [hash]);
       if (result == null) return { status: "pending", height: null };
       const record = asRecord(result) ?? {};
       const statusText = String(record.status ?? record.outcome ?? "").toLowerCase();
-      const height = pickNumber(record, ["blockHeight", "block_height", "height", "committedHeight"]);
+      const height = pickNumber(record, ["blockHeight", "block_height", "height", "committedHeight", "round"]);
       if (statusText.includes("fail") || record.success === false) return { status: "failed", height };
       if (statusText.includes("pend")) return { status: "pending", height };
+      if (method === "kovanica_getTransaction" && height == null) return { status: "pending", height };
       return { status: "confirmed", height };
     } catch {
       continue;
