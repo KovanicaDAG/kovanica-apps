@@ -3,8 +3,12 @@ import { checkAddress, decodeRecipient } from "@/core/address";
 import { equalBytes } from "@/core/bytes";
 import {
   buildContractCall,
+  decodeHtlc,
+  decodeMultisigState,
+  decodeMultisigTx,
   decodeTokenState,
   decodeVault,
+  multisigTxSlot,
   prefixedSlot,
   tokenStateSlot,
   type CallDraft,
@@ -28,6 +32,7 @@ const ACTIONS = {
     { id: "token_mint", label: "mint", sign: true },
   ],
   htlc: [
+    { id: "htlc_status", label: "status", sign: false },
     { id: "htlc_create", label: "create", sign: true },
     { id: "htlc_claim", label: "claim", sign: true },
     { id: "htlc_refund", label: "refund", sign: true },
@@ -38,6 +43,9 @@ const ACTIONS = {
     { id: "status", label: "status", sign: false },
   ],
   multisig: [
+    { id: "multisig_status", label: "status", sign: false },
+    { id: "multisig_tx", label: "tx_status", sign: false },
+    { id: "multisig_create", label: "create", sign: true },
     { id: "multisig_propose", label: "propose", sign: true },
     { id: "multisig_confirm", label: "confirm", sign: true },
     { id: "multisig_execute", label: "execute", sign: true },
@@ -70,6 +78,8 @@ export function Contracts({
   const [recordId, setRecordId] = useState("");
   const [proposal, setProposal] = useState("");
   const [callData, setCallData] = useState("");
+  const [threshold, setThreshold] = useState("1");
+  const [owners, setOwners] = useState("");
   const [value, setValue] = useState("0");
   const [gas, setGas] = useState("100000");
   const [error, setError] = useState<string | null>(null);
@@ -105,9 +115,10 @@ export function Contracts({
     if (name === "hash") return id === "htlc_create";
     if (name === "timelock") return id === "htlc_create" || id === "vault_create";
     if (name === "secret") return id === "htlc_claim";
-    if (name === "record") return id === "htlc_claim" || id === "htlc_refund" || id === "vault_claim" || id === "status" || id === "multisig_propose" || id === "multisig_confirm" || id === "multisig_execute";
-    if (name === "proposal") return id === "multisig_confirm" || id === "multisig_execute";
+    if (name === "record") return id === "htlc_status" || id === "htlc_claim" || id === "htlc_refund" || id === "vault_claim" || id === "status" || id === "multisig_propose" || id === "multisig_confirm" || id === "multisig_execute";
+    if (name === "proposal") return id === "multisig_confirm" || id === "multisig_execute" || id === "multisig_tx";
     if (name === "calldata") return id === "multisig_propose";
+    if (name === "threshold" || name === "owners") return id === "multisig_create";
     return false;
   }
 
@@ -143,6 +154,8 @@ export function Contracts({
       tokenUnits: current.id === "token_transfer" || current.id === "token_mint" ? amountAtoms : null,
       txId: needs("proposal") ? whole(proposal, "Proposal id") : null,
       callDataHex: callData,
+      threshold: needs("threshold") ? Number.parseInt(threshold, 10) : null,
+      owners: needs("owners") ? owners : undefined,
     });
   }
 
@@ -209,7 +222,29 @@ export function Contracts({
         setReadout(`${state.name} (${state.symbol}) balance_of ${owner.trim().toLowerCase()}: ${(row?.amount ?? 0n).toString()} base units. Supply ${state.totalSupply.toString()}. Decimals ${state.decimals}.`);
         return;
       }
+      if (current.id === "multisig_status") {
+        const raw = await readStorageAt(net.rpcUrl, contract, tokenStateSlot());
+        const state = raw ? decodeMultisigState(raw) : null;
+        if (!state) throw new Error("This contract has no multisig state yet.");
+        setReadout(`Multisig status: threshold ${state.threshold} of ${state.owners.length} owners, next_tx_id ${state.nextTxId.toString()}.\nOwners: ${state.owners.join(", ")}`);
+        return;
+      }
+      if (current.id === "multisig_tx") {
+        const txId = whole(proposal, "Proposal id");
+        const raw = await readStorageAt(net.rpcUrl, contract, multisigTxSlot(txId));
+        const tx = raw ? decodeMultisigTx(raw) : null;
+        if (!tx) throw new Error(`No multisig transaction found at proposal id ${txId.toString()}.`);
+        setReadout(`Proposal ${tx.id.toString()}: to ${tx.to}, amount ${tx.amount.toString()} atoms, executed ${tx.executed ? "yes" : "no"}, confirmations: ${tx.confirmations.length} [${tx.confirmations.join(", ")}].`);
+        return;
+      }
       const id = hexToId(recordId);
+      if (current.id === "htlc_status") {
+        const raw = await readStorageAt(net.rpcUrl, contract, prefixedSlot("kvnc/v1/htlc/", id));
+        const htlc = raw ? decodeHtlc(raw) : null;
+        if (!htlc) throw new Error("No HTLC record at that swap id.");
+        setReadout(`HTLC status: sender ${htlc.sender}, claimer ${htlc.claimer}, amount ${htlc.amount.toString()} atoms, hash ${htlc.hash}, expiry ${htlc.expiry.toString()}, claimed ${htlc.claimed ? "yes" : "no"}, refunded ${htlc.refunded ? "yes" : "no"}.`);
+        return;
+      }
       const prefix = current.id === "status" ? "kvnc/v1/vault/" : "";
       if (!prefix) throw new Error("That read is not available.");
       const raw = await readStorageAt(net.rpcUrl, contract, prefixedSlot(prefix, id));
@@ -263,6 +298,8 @@ export function Contracts({
       {needs("hash") ? <Field label="Hash (32-byte hex)" value={hash} onChange={setHash} mono /> : null}
       {needs("timelock") ? <Field label={current.id === "vault_create" ? "Lock until (unix ms)" : "Timelock (unix ms)"} value={timelock} onChange={setTimelock} /> : null}
       {needs("secret") ? <Field label="Secret (hex or text)" value={secret} onChange={setSecret} mono /> : null}
+      {needs("threshold") ? <Field label="Threshold (M-of-N, e.g. 2)" value={threshold} onChange={setThreshold} /> : null}
+      {needs("owners") ? <Field label="Owners (comma or space separated addresses)" value={owners} onChange={setOwners} mono /> : null}
       {needs("record") ? <Field label={contractId === "multisig" ? "Multisig id (32-byte hex)" : contractId === "htlc" ? "Swap id (32-byte hex)" : "Vault id (32-byte hex)"} value={recordId} onChange={setRecordId} mono /> : null}
       {needs("proposal") ? <Field label="Proposal id" value={proposal} onChange={setProposal} /> : null}
       {needs("calldata") ? <Field label="Call data hex, optional" value={callData} onChange={setCallData} mono /> : null}

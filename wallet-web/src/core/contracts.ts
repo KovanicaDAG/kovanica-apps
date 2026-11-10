@@ -1,7 +1,7 @@
 import { blake3 } from "@noble/hashes/blake3.js";
-import { decodeRecipient } from "./address";
-import { bytesToHex, concat, hexToBytes, u32le, u64le, u128le } from "./bytes";
-import type { PreviewDetail } from "./session";
+import { decodeRecipient } from "./address.ts";
+import { bytesToHex, concat, hexToBytes, u32le, u64le, u128le } from "./bytes.ts";
+import type { PreviewDetail } from "./session.ts";
 
 /** Storage slot for `blake3("kvnc/v1/state")`, the key `kovanica_getStorageAt` expects. */
 export const TOKEN_STATE_LABEL = "kvnc/v1/state";
@@ -31,6 +31,8 @@ export type CallInput = {
   tokenUnits: bigint | null;
   txId: bigint | null;
   callDataHex: string;
+  threshold?: number | null;
+  owners?: string;
 };
 
 export type TokenBalanceRow = { account: Uint8Array; amount: bigint };
@@ -150,6 +152,43 @@ export function buildContractCall(input: CallInput): CallDraft {
       method,
       args: id,
       details: [{ label: method === "vault_claim" ? "Vault id" : "Vault id", value: bytesToHex(id), mono: true }],
+    };
+  }
+  if (input.contract === "multisig" && method === "multisig_create") {
+    if (input.threshold == null || input.threshold <= 0) {
+      throw new Error("Enter a valid threshold (>= 1)");
+    }
+    const rawOwners = (input.owners || "")
+      .split(/[,\s]+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (rawOwners.length === 0) throw new Error("Enter at least one owner address");
+    if (input.threshold > rawOwners.length) throw new Error("Threshold cannot exceed number of owners");
+    const parsedOwners = rawOwners.map((addr) => key(addr, input.chainId, "owner"));
+    const sorted = [...parsedOwners].sort((a, b) => {
+      for (let i = 0; i < 32; i++) {
+        if (a[i] !== b[i]) return a[i]! - b[i]!;
+      }
+      return 0;
+    });
+    const uniqueOwners: Uint8Array[] = [];
+    for (const owner of sorted) {
+      if (uniqueOwners.length === 0 || bytesToHex(owner) !== bytesToHex(uniqueOwners[uniqueOwners.length - 1]!)) {
+        uniqueOwners.push(owner);
+      }
+    }
+    if (input.threshold > uniqueOwners.length) throw new Error("Threshold cannot exceed unique owners");
+    const ownersPayload = concat([u64le(BigInt(uniqueOwners.length)), ...uniqueOwners]);
+    const args = concat([ownersPayload, u32le(input.threshold)]);
+    const expectedId = deriveMultisigIdHex(uniqueOwners, input.threshold);
+    return {
+      method,
+      args,
+      details: [
+        { label: "Threshold", value: `${input.threshold} of ${uniqueOwners.length}` },
+        { label: "Derived ID", value: expectedId, mono: true },
+        { label: "Owners", value: uniqueOwners.map((o) => bytesToHex(o)).join(", "), mono: true },
+      ],
     };
   }
   if (input.contract === "multisig" && method === "multisig_propose") {
@@ -354,6 +393,91 @@ export type VaultRecord = {
   schedule: string;
   cancelled: boolean;
 };
+
+export type MultisigState = {
+  owners: string[];
+  threshold: number;
+  nextTxId: bigint;
+};
+
+export function decodeMultisigState(bytes: Uint8Array): MultisigState | null {
+  try {
+    const reader = new Reader(bytes);
+    const count = reader.u64();
+    if (count > 1000n) return null;
+    const owners: string[] = [];
+    for (let i = 0n; i < count; i += 1n) {
+      owners.push(bytesToHex(reader.take(32)));
+    }
+    const threshold = reader.u32();
+    const nextTxId = reader.u64();
+    if (reader.rest() !== 0) return null;
+    return { owners, threshold, nextTxId };
+  } catch {
+    return null;
+  }
+}
+
+export type MultisigTxRecord = {
+  id: bigint;
+  to: string;
+  amount: bigint;
+  dataHex: string;
+  confirmations: string[];
+  executed: boolean;
+};
+
+export function decodeMultisigTx(bytes: Uint8Array): MultisigTxRecord | null {
+  try {
+    const reader = new Reader(bytes);
+    const id = reader.u64();
+    const to = bytesToHex(reader.take(32));
+    const amount = reader.u128();
+    const dataLen = reader.u64();
+    if (dataLen > BigInt(reader.rest())) return null;
+    const data = reader.take(Number(dataLen));
+    const confCount = reader.u64();
+    if (confCount > 1000n) return null;
+    const confirmations: string[] = [];
+    for (let i = 0n; i < confCount; i += 1n) {
+      confirmations.push(bytesToHex(reader.take(32)));
+    }
+    const executed = reader.u8() === 1;
+    if (reader.rest() !== 0) return null;
+    return {
+      id,
+      to,
+      amount,
+      dataHex: bytesToHex(data),
+      confirmations,
+      executed,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function multisigTxSlot(txId: bigint): string {
+  return bytesToHex(blake3(concat([new TextEncoder().encode("kvnc/v1/mtx/"), u64le(txId)])));
+}
+
+/**
+ * Derives deterministic MultisigId configuration fingerprint per PRO-21 / kovanica-multisig:
+ * id = hash( b"multisig/id" || each owner (32 bytes, sorted ascending) || threshold.to_le_bytes() )
+ */
+export function deriveMultisigId(owners: Uint8Array[], threshold: number): Uint8Array {
+  const sorted = [...owners].sort((a, b) => {
+    for (let i = 0; i < 32; i++) {
+      if (a[i] !== b[i]) return a[i]! - b[i]!;
+    }
+    return 0;
+  });
+  return blake3(concat([new TextEncoder().encode("multisig/id"), ...sorted, u32le(threshold)]));
+}
+
+export function deriveMultisigIdHex(owners: Uint8Array[], threshold: number): string {
+  return bytesToHex(deriveMultisigId(owners, threshold));
+}
 
 function scheduleText(reader: Reader): string {
   const variant = reader.u32();
