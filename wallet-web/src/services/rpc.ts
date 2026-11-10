@@ -267,3 +267,34 @@ export async function readStorageAt(rpcUrl: string, address: string, slotHex: st
   }
   throw new Error(last);
 }
+
+export async function estimateGas(
+  rpcUrl: string,
+  call: { from?: string; to?: string; value?: string | number; data?: string; entry?: string }
+): Promise<bigint> {
+  for (const candidate of withRpcPath(rpcUrl)) {
+    try {
+      const result = await post(candidate, "kovanica_estimateGas", [call]);
+      const qty = quantity(result);
+      if (qty != null) return qty;
+    } catch {
+      // try next candidate
+    }
+  }
+  return 21000n;
+}
+
+export async function simulateCall(
+  rpcUrl: string,
+  call: { from?: string; to?: string; value?: string | number; data?: string; entry?: string }
+): Promise<string> {
+  for (const candidate of withRpcPath(rpcUrl)) {
+    try {
+      const result = await post(candidate, "kovanica_call", [call]);
+      return typeof result === "string" ? result : "0x";
+    } catch (err) {
+      throw err;
+    }
+  }
+  return "0x";
+}
