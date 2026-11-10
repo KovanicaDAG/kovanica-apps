@@ -62,6 +62,7 @@ jobs:
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TOOLCHAIN/bin/aarch64-linux-android24-clang
           export RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384"
           cd kovanica-core
+          rustup target add aarch64-linux-android
           cargo build --target aarch64-linux-android --release -p kovanica-light-ffi
           cp target/aarch64-linux-android/release/libkovanica_light_ffi.so ../android-wallet/app/src/main/jniLibs/arm64-v8a/
 
