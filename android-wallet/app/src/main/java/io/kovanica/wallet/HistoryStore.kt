@@ -48,6 +48,17 @@ class HistoryStore(context: Context) {
         save(networkId, next)
     }
 
+    /** Replace the row whose hash matches. No-op when this phone never recorded it. */
+    fun update(networkId: String, hash: String, block: (HistoryEntry) -> HistoryEntry) {
+        val needle = hash.removePrefix("0x").removePrefix("0X")
+        if (needle.isEmpty()) return
+        val current = entries(networkId)
+        if (current.none { it.hash.removePrefix("0x").removePrefix("0X") == needle }) return
+        save(networkId, current.map { entry ->
+            if (entry.hash.removePrefix("0x").removePrefix("0X") == needle) block(entry) else entry
+        })
+    }
+
     /** Drop every entry recorded on [networkId]. Local only — the chain is untouched. */
     fun clear(networkId: String) {
         prefs.edit().remove(key(networkId)).apply()
@@ -89,7 +100,12 @@ class HistoryStore(context: Context) {
  * @property contract token contract, for the token kinds.
  * @property amount human-readable amount, already scaled by the asset's decimals.
  * @property symbol asset ticker shown next to the amount (`KUNA`, or a token's symbol).
- * @property status always [STATUS_SUBMITTED]: the app has no confirmation feed.
+ * @property status submission state, then the receipt outcome when one arrives.
+ * @property method contract method, when [kind] is a call.
+ * @property receiptCode `0x1` or `0x0` once a receipt is decoded.
+ * @property gasUsed gas the receipt reported, decimal.
+ * @property errorText revert reason, when the call failed.
+ * @property events comma-separated log topics from the receipt.
  */
 data class HistoryEntry(
     val kind: String,
@@ -101,6 +117,11 @@ data class HistoryEntry(
     val amount: String? = null,
     val symbol: String? = null,
     val status: String = STATUS_SUBMITTED,
+    val method: String? = null,
+    val receiptCode: String? = null,
+    val gasUsed: String? = null,
+    val errorText: String? = null,
+    val events: String? = null,
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("kind", kind)
@@ -112,6 +133,11 @@ data class HistoryEntry(
         .put("networkId", networkId)
         .put("timestampMs", timestampMs)
         .put("status", status)
+        .putOrNull("method", method)
+        .putOrNull("receiptCode", receiptCode)
+        .putOrNull("gasUsed", gasUsed)
+        .putOrNull("errorText", errorText)
+        .putOrNull("events", events)
 
     companion object {
         const val STATUS_SUBMITTED: String = "submitted"
@@ -140,6 +166,11 @@ data class HistoryEntry(
                 amount = obj.stringOrNull("amount"),
                 symbol = obj.stringOrNull("symbol"),
                 status = obj.stringOrNull("status") ?: STATUS_SUBMITTED,
+                method = obj.stringOrNull("method"),
+                receiptCode = obj.stringOrNull("receiptCode"),
+                gasUsed = obj.stringOrNull("gasUsed"),
+                errorText = obj.stringOrNull("errorText"),
+                events = obj.stringOrNull("events"),
             )
         }
     }

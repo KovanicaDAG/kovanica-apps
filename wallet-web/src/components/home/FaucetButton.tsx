@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { FAUCET_ATOMS, cooldownRemaining, faucetChain, rememberClaim } from "@/core/faucet";
+import { faucetQuick } from "@/core/history-row";
 import { readAccount, requestAirdrop } from "@/services/rpc";
 import { useActivity } from "@/stores/activity";
 import { useNetwork } from "@/stores/network";
 import { toast } from "sonner";
 
-export function FaucetButton({ address }: { address: string }) {
+export function FaucetButton({ address, onlyHybrid = false }: { address: string; onlyHybrid?: boolean }) {
   const net = useNetwork();
   const chainId = net.probedChainId;
   const [left, setLeft] = useState(0);
@@ -18,7 +19,7 @@ export function FaucetButton({ address }: { address: string }) {
     return () => window.clearInterval(timer);
   }, [chainId, address]);
 
-  if (!faucetChain(chainId)) return null;
+  if (onlyHybrid ? !faucetQuick(chainId) : !faucetChain(chainId)) return null;
   const seconds = Math.ceil(left / 1000);
 
   return (
@@ -54,7 +55,7 @@ export function FaucetButton({ address }: { address: string }) {
           .finally(() => setBusy(false));
       }}
     >
-      {busy ? "Requesting…" : left > 0 ? `Claim again in ${seconds}s` : "Request Testnet KVNC"}
+      {busy ? "Requesting…" : left > 0 ? `Claim again in ${seconds}s` : onlyHybrid ? "Request Testnet Faucet" : "Request Testnet KVNC"}
     </button>
   );
 }

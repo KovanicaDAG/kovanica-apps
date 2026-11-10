@@ -5,8 +5,11 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.math.BigInteger
 
 class ContractCallsTest {
     private val party = KvncAddress.display("11".repeat(32))
@@ -126,5 +129,36 @@ class ContractCallsTest {
         assertEquals("revert", revert.status)
         assertEquals("0x0", revert.code)
         assertEquals("locked", revert.error)
+    }
+
+    @Test
+    fun shortfall_faucet_and_describe_roundtrip() {
+        assertEquals(BigInteger.valueOf(6000), ContractCalls.callNeed("htlc_create", "0", "1000", "5000"))
+        assertEquals(BigInteger.valueOf(1000), ContractCalls.callNeed("token_transfer", "0", "1000", "5000"))
+        assertEquals(BigInteger.valueOf(2000), ContractCalls.shortfall(BigInteger.valueOf(4000), BigInteger.valueOf(6000)))
+        assertEquals(BigInteger.ZERO, ContractCalls.shortfall(BigInteger.valueOf(6000), BigInteger.valueOf(6000)))
+        assertTrue(ContractCalls.faucetQuick(ChainIds.HYBRID))
+        assertTrue(ContractCalls.faucetQuick(ChainIds.LOCAL))
+        assertFalse(ContractCalls.faucetQuick(ChainIds.MAINNET))
+        assertFalse(ContractCalls.faucetQuick(3))
+        assertEquals("Token", ContractCalls.family("token_transfer"))
+        assertEquals("HTLC", ContractCalls.family("htlc_create"))
+        assertEquals("Vault", ContractCalls.family("vault_claim"))
+        assertEquals("Multisig", ContractCalls.family("multisig_execute"))
+
+        val built = ContractCalls.build(
+            ContractCalls.Draft(
+                family = "token",
+                action = "token_transfer",
+                chainId = ChainIds.HYBRID,
+                party = party,
+                amount = "1000000000",
+            ),
+        )
+        val described = ContractCalls.describe(built.method, built.argsHex, ChainIds.HYBRID)
+        assertNotNull(described)
+        assertTrue(described!!.any { it.startsWith("Target: kvnc") && it.endsWith("dag") })
+        assertTrue(described.any { it.contains("1000000000") })
+        assertNull(ContractCalls.describe("withdraw", "aa", ChainIds.HYBRID))
     }
 }

@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { checkAddress, decodeRecipient } from "./core/address";
 import { acceptSigned } from "./core/airgap";
 import { bytesToHex, equalBytes, hexToBytes } from "./core/bytes";
+import { callNeed, faucetQuick, shortfall } from "./core/history-row";
+import { pushOutbox, updateOutbox } from "./core/outbox";
 import { decodeReceipt, formatReceipt } from "./core/receipt";
 import {
   buildContractCall,
@@ -123,6 +125,8 @@ export function mountContracts(shownChainId: () => string | null): void {
   const importButton = required<HTMLButtonElement>("contract-import");
   const status = required<HTMLParagraphElement>("contract-status");
   const receipt = required<HTMLParagraphElement>("contract-receipt");
+  const funds = required<HTMLParagraphElement>("contract-funds");
+  const faucet = required<HTMLButtonElement>("contract-faucet");
   const fields: Record<string, HTMLElement> = {
     owner: required<HTMLElement>("field-owner"),
     recipient: required<HTMLElement>("field-recipient"),
@@ -223,6 +227,18 @@ export function mountContracts(shownChainId: () => string | null): void {
   async function broadcast(raw: string): Promise<void> {
     const hash = await invoke<string>("wallet_broadcast_raw", { raw });
     status.textContent = `Transaction broadcast successful! TxHash: ${hash}`;
+    if (pending) {
+      pushOutbox({
+        hash: hash.replace(/^0x/, ""),
+        method: pending.method,
+        counterparty: pending.contract,
+        status: "pending",
+        code: null,
+        gasUsed: null,
+        error: null,
+        events: [],
+      });
+    }
     await watchReceipt(hash);
   }
 
@@ -237,6 +253,13 @@ export function mountContracts(shownChainId: () => string | null): void {
         const view = decodeReceipt(JSON.parse(raw) as unknown);
         if (!view.hash) view.hash = hash.replace(/^0x/, "");
         receipt.textContent = formatReceipt(view);
+        updateOutbox(hash.replace(/^0x/, ""), {
+          status: view.status === "success" ? "success" : view.status === "revert" ? "revert" : "pending",
+          code: view.code,
+          gasUsed: view.gasUsed,
+          error: view.error,
+          events: view.logs.map((log) => log.topics[0] || "event").slice(0, 4),
+        });
         if (view.status !== "pending") return;
       } catch (error) {
         receipt.textContent = messageFrom(error);
@@ -246,6 +269,33 @@ export function mountContracts(shownChainId: () => string | null): void {
     }
   }
 
+  async function paintFunds(method: string, valueAtoms: string, amountAtoms: string, feeAtoms: string, chainId: string): Promise<void> {
+    funds.hidden = true;
+    faucet.hidden = true;
+    const reported = await invoke<{ atoms: string }>("wallet_balance");
+    const balance = /^\d+$/.test(reported.atoms) ? BigInt(reported.atoms) : 0n;
+    const missing = shortfall(balance, callNeed(method, valueAtoms, feeAtoms, amountAtoms));
+    if (missing === 0n) return;
+    funds.hidden = false;
+    funds.textContent = `Balance is short by ${missing.toString()} atoms for this call value and fee.`;
+    const chain = Number(chainId);
+    faucet.hidden = !faucetQuick(Number.isInteger(chain) ? chain : null);
+  }
+
+  faucet.addEventListener("click", () => {
+    void (async () => {
+      clearError();
+      try {
+        const hash = await invoke<string>("wallet_request_airdrop");
+        status.textContent = `Faucet claim sent. TxHash: ${hash}`;
+        if (pending) {
+          await paintFunds(pending.method, pending.value, amount.value, pending.quote.feeAtoms, pending.quote.chainId);
+        }
+      } catch (error) {
+        showError(messageFrom(error));
+      }
+    })();
+  });
   kind.addEventListener("change", () => {
     pending = null;
     reviewBox.hidden = true;
@@ -328,6 +378,7 @@ export function mountContracts(shownChainId: () => string | null): void {
         mainnetLabel.hidden = quote.chainId !== "1";
         reviewBox.hidden = false;
         signed.value = "";
+        await paintFunds(pending.method, pending.value, amountAtoms?.toString() ?? "0", quote.feeAtoms, quote.chainId);
       } catch (error) {
         pending = null;
         reviewBox.hidden = true;

@@ -278,6 +278,136 @@ object ContractCalls {
         return lines.joinToString("\n")
     }
 
+    fun family(method: String): String? = when {
+        method.startsWith("token_") -> "Token"
+        method.startsWith("htlc_") -> "HTLC"
+        method.startsWith("vault_") -> "Vault"
+        method.startsWith("multisig_") -> "Multisig"
+        method.isNotBlank() -> "Contract"
+        else -> null
+    }
+
+    /** Atoms an HTLC create or vault deposit pulls from the caller. Token units are not KVNC. */
+    fun nativePull(method: String, amount: String): BigInteger {
+        if (method != "htlc_create" && method != "vault_create") return BigInteger.ZERO
+        return whole(amount)
+    }
+
+    fun callNeed(method: String, valueAtoms: String, feeAtoms: String, amountAtoms: String): BigInteger =
+        whole(valueAtoms).add(whole(feeAtoms)).add(nativePull(method, amountAtoms))
+
+    fun shortfall(balance: BigInteger, need: BigInteger): BigInteger =
+        if (balance >= need) BigInteger.ZERO else need.subtract(balance)
+
+    /** Inline faucet on the contract form. Chain 5 and local 1337 only. */
+    fun faucetQuick(chainId: Long): Boolean = chainId == ChainIds.HYBRID || chainId == ChainIds.LOCAL
+
+    /**
+     * Human lines for a canonical call, or null when [argsHex] is not that method.
+     * Cold review uses this so the signer can read the args without trusting the hot device.
+     */
+    fun describe(method: String, argsHex: String, chainId: Long): List<String>? {
+        val clean = argsHex.trim().removePrefix("0x").removePrefix("0X")
+        if (clean.isEmpty() || clean.length % 2 != 0) return null
+        if (clean.any { it !in '0'..'9' && it !in 'a'..'f' && it !in 'A'..'F' }) return null
+        val bytes = TokenCodec.unhex(clean) ?: return null
+        val body = try {
+            when (method) {
+                "token_transfer", "token_mint" -> {
+                    if (bytes.size != 48) return null
+                    listOf(
+                        "Method: $method",
+                        "Target: ${show(bytes.copyOfRange(0, 32))}",
+                        "Amount: ${readLe(bytes, 32, 16)} atoms",
+                    )
+                }
+                "htlc_create" -> {
+                    if (bytes.size != 88) return null
+                    listOf(
+                        "Method: htlc_create",
+                        "Beneficiary: ${show(bytes.copyOfRange(0, 32))}",
+                        "Amount: ${readLe(bytes, 32, 16)} atoms",
+                        "Hash: ${TokenCodec.hex(bytes.copyOfRange(48, 80))}",
+                        "Locktime: ${readLe(bytes, 80, 8)} ms",
+                    )
+                }
+                "htlc_claim" -> decodeVecCall(bytes, "htlc_claim", "Swap id", secret = true)
+                "htlc_refund" -> idOnly(bytes, "htlc_refund", "Swap id")
+                "vault_create" -> {
+                    if (bytes.size != 60) return null
+                    listOf(
+                        "Method: vault_create",
+                        "Beneficiary: ${show(bytes.copyOfRange(0, 32))}",
+                        "Amount: ${readLe(bytes, 32, 16)} atoms",
+                        "Schedule: Absolute",
+                        "Lock-until: ${readLe(bytes, 52, 8)} ms",
+                    )
+                }
+                "vault_claim" -> idOnly(bytes, "vault_claim", "Vault id")
+                "vault_cancel" -> idOnly(bytes, "vault_cancel", "Vault id")
+                "multisig_propose" -> decodePropose(bytes)
+                "multisig_confirm", "multisig_execute" -> {
+                    if (bytes.size != 40) return null
+                    listOf(
+                        "Method: $method",
+                        "Multisig id: ${TokenCodec.hex(bytes.copyOfRange(0, 32))}",
+                        "Proposal id: ${readLe(bytes, 32, 8)}",
+                    )
+                }
+                else -> null
+            }
+        } catch (_: Exception) {
+            null
+        } ?: return null
+        val note = warning(chainId)
+        return if (note == null) body else listOf(note) + body
+    }
+
+    private fun whole(raw: String): BigInteger {
+        val text = raw.trim()
+        if (!text.matches(Regex("^[0-9]+$"))) return BigInteger.ZERO
+        return BigInteger(text)
+    }
+
+    private fun readLe(bytes: ByteArray, offset: Int, width: Int): BigInteger {
+        var value = BigInteger.ZERO
+        for (i in width - 1 downTo 0) {
+            value = value.shiftLeft(8).or(BigInteger.valueOf((bytes[offset + i].toInt() and 0xff).toLong()))
+        }
+        return value
+    }
+
+    private fun idOnly(bytes: ByteArray, method: String, label: String): List<String>? {
+        if (bytes.size != 32) return null
+        return listOf("Method: $method", "$label: ${TokenCodec.hex(bytes)}")
+    }
+
+    private fun decodeVecCall(bytes: ByteArray, method: String, idLabel: String, secret: Boolean): List<String>? {
+        if (bytes.size < 40) return null
+        val len = readLe(bytes, 32, 8)
+        if (len.bitLength() > 20) return null
+        val n = len.toInt()
+        if (bytes.size != 40 + n) return null
+        val tail = if (secret) "Secret: ${TokenCodec.hex(bytes.copyOfRange(40, 40 + n))}" else "Data: ${TokenCodec.hex(bytes.copyOfRange(40, 40 + n))}"
+        return listOf("Method: $method", "$idLabel: ${TokenCodec.hex(bytes.copyOfRange(0, 32))}", tail)
+    }
+
+    private fun decodePropose(bytes: ByteArray): List<String>? {
+        if (bytes.size < 88) return null
+        val len = readLe(bytes, 80, 8)
+        if (len.bitLength() > 20) return null
+        val n = len.toInt()
+        if (bytes.size != 88 + n) return null
+        val data = if (n == 0) "none" else TokenCodec.hex(bytes.copyOfRange(88, 88 + n))
+        return listOf(
+            "Method: multisig_propose",
+            "Multisig id: ${TokenCodec.hex(bytes.copyOfRange(0, 32))}",
+            "Target: ${show(bytes.copyOfRange(32, 64))}",
+            "Amount: ${readLe(bytes, 64, 16)} atoms",
+            "Call data: $data",
+        )
+    }
+
     private fun show(key: ByteArray): String = KvncAddress.display(TokenCodec.hex(key))
 
     private fun amountLine(atoms: BigInteger, token: Boolean): String {
