@@ -27,4 +27,15 @@ class NodePowTest {
         assertEquals(2, header?.optInt("round"))
         assertEquals("", NodePow.parentJson(header!!))
     }
+
+    @Test
+    fun node_store_local_db_path_is_scoped_under_files_dir() {
+        val filesDir = java.io.File("/tmp/kovanica-test-files")
+        val context = object : android.content.ContextWrapper(null) {
+            override fun getFilesDir(): java.io.File = filesDir
+        }
+        val path = NodeStore.localDbPath(context)
+        assertTrue(path.endsWith("mobile_node.redb"))
+        assertTrue(path.startsWith(filesDir.absolutePath))
+    }
 }

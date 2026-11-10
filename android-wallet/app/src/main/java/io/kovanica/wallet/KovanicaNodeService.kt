@@ -304,7 +304,17 @@ object NodePrefs {
 object NodeStore {
     const val BADGE = "Pruning window: 14,400 rounds (~16h)"
 
+    fun localDbPath(context: Context): String {
+        return File(context.filesDir, "mobile_node.redb").absolutePath
+    }
+
     fun count(context: Context): Int {
+        val stats = runCatching {
+            uniffi.kovanica_light.getLocalStorageStats(localDbPath(context))
+        }.getOrNull()
+        if (stats != null && stats.totalBlocks > 0uL) {
+            return stats.totalBlocks.toInt()
+        }
         val dir = File(context.filesDir, "headers")
         if (!dir.isDirectory) return 0
         return dir.listFiles()?.count { roundOf(it) != null } ?: 0
@@ -318,6 +328,10 @@ object NodeStore {
         files.forEach { file ->
             val stored = roundOf(file) ?: return@forEach
             if (stored !in kept) file.delete()
+        }
+        // Ingest into embedded RedB mobile node database
+        runCatching {
+            uniffi.kovanica_light.storeVerifiedBlockHeader(localDbPath(context), headerJson)
         }
         pruneEmbeddedDatabases(context, round)
         return kept.size

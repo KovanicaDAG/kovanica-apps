@@ -696,6 +696,10 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_faucet_allowed(
     ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_get_local_account(
+    ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_get_local_storage_stats(
+    ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_import_hd_wallet(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_import_wallet(
@@ -727,6 +731,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_kovanica_light_ffi_checksum_func_sign_transfer_raw(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_sign_witness_raw(
+    ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_store_verified_block_header(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_verify_header(
     ): Int
@@ -775,6 +781,10 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_faucet_allowed(`chainId`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_kovanica_light_ffi_fn_func_get_local_account(`dbPath`: RustBuffer.ByValue,`address`: RustBuffer.ByValue,`chainId`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_get_local_storage_stats(`dbPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_import_hd_wallet(`mnemonic`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_import_wallet(`mnemonic`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -807,6 +817,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_sign_witness_raw(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`chainId`: Long,`epoch`: Long,`beaconHex`: RustBuffer.ByValue,`nonce`: Long,`feeRate`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_store_verified_block_header(`dbPath`: RustBuffer.ByValue,`headerJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     external fun uniffi_kovanica_light_ffi_fn_func_verify_header(`chainId`: Long,`epoch`: Long,`committeeJson`: RustBuffer.ByValue,`headerJson`: RustBuffer.ByValue,`sealsJson`: RustBuffer.ByValue,`parentJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_verify_pow_header_chain_json(`expectedChainId`: Long,`headersJson`: RustBuffer.ByValue,`nowMs`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -972,6 +984,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_kovanica_light_ffi_checksum_func_faucet_allowed() != 22913) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_get_local_account() != 39088) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_get_local_storage_stats() != 54222) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_import_hd_wallet() != 50109) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1018,6 +1036,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_sign_witness_raw() != 3162) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_store_verified_block_header() != 55102) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_verify_header() != 48525) {
@@ -1435,6 +1456,115 @@ public object FfiConverterTypeImportedWallet: FfiConverterRustBuffer<ImportedWal
     override fun write(value: ImportedWallet, buf: ByteBuffer) {
             FfiConverterString.write(value.`address`, buf)
             FfiConverterString.write(value.`keystoreJson`, buf)
+    }
+}
+
+
+
+/**
+ * Account details held in local node storage.
+ */
+data class LocalAccountInfo (
+    var `balance`: kotlin.ULong
+    , 
+    var `nonce`: kotlin.ULong
+    , 
+    var `found`: kotlin.Boolean
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeLocalAccountInfo: FfiConverterRustBuffer<LocalAccountInfo> {
+    override fun read(buf: ByteBuffer): LocalAccountInfo {
+        return LocalAccountInfo(
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: LocalAccountInfo) = (
+            FfiConverterULong.allocationSize(value.`balance`) +
+            FfiConverterULong.allocationSize(value.`nonce`) +
+            FfiConverterBoolean.allocationSize(value.`found`)
+    )
+
+    override fun write(value: LocalAccountInfo, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`balance`, buf)
+            FfiConverterULong.write(value.`nonce`, buf)
+            FfiConverterBoolean.write(value.`found`, buf)
+    }
+}
+
+
+
+/**
+ * Statistics and size metrics for local mobile pruned node storage.
+ */
+data class LocalStorageStats (
+    /**
+     * Committed leader / DAG tip round stored locally.
+     */
+    var `tipRound`: kotlin.ULong
+    , 
+    /**
+     * Number of statement blocks currently held in local storage.
+     */
+    var `totalBlocks`: kotlin.ULong
+    , 
+    /**
+     * Number of DAG consensus blocks currently held in local storage.
+     */
+    var `totalDagBlocks`: kotlin.ULong
+    , 
+    /**
+     * Local file size in bytes.
+     */
+    var `sizeBytes`: kotlin.ULong
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeLocalStorageStats: FfiConverterRustBuffer<LocalStorageStats> {
+    override fun read(buf: ByteBuffer): LocalStorageStats {
+        return LocalStorageStats(
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: LocalStorageStats) = (
+            FfiConverterULong.allocationSize(value.`tipRound`) +
+            FfiConverterULong.allocationSize(value.`totalBlocks`) +
+            FfiConverterULong.allocationSize(value.`totalDagBlocks`) +
+            FfiConverterULong.allocationSize(value.`sizeBytes`)
+    )
+
+    override fun write(value: LocalStorageStats, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`tipRound`, buf)
+            FfiConverterULong.write(value.`totalBlocks`, buf)
+            FfiConverterULong.write(value.`totalDagBlocks`, buf)
+            FfiConverterULong.write(value.`sizeBytes`, buf)
     }
 }
 
@@ -2091,6 +2221,38 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
     
 
         /**
+         * Query an account's state directly from local node storage without network access.
+         */
+    @Throws(LightFfiException::class) fun `getLocalAccount`(`dbPath`: kotlin.String, `address`: kotlin.String, `chainId`: kotlin.ULong): LocalAccountInfo {
+            return FfiConverterTypeLocalAccountInfo.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_get_local_account(
+    
+        
+        FfiConverterString.lower(`dbPath`),
+        FfiConverterString.lower(`address`),
+        FfiConverterULong.lower(`chainId`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Return current storage metrics for a local node database.
+         */
+    @Throws(LightFfiException::class) fun `getLocalStorageStats`(`dbPath`: kotlin.String): LocalStorageStats {
+            return FfiConverterTypeLocalStorageStats.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_get_local_storage_stats(
+    
+        
+        FfiConverterString.lower(`dbPath`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Import an existing 12- or 24-word BIP-39 mnemonic into an HD keystore. Runs Argon2id.
          */
     @Throws(LightFfiException::class) fun `importHdWallet`(`mnemonic`: kotlin.String, `passphrase`: kotlin.String): ImportedWallet {
@@ -2416,6 +2578,22 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         FfiConverterString.lower(`beaconHex`),
         FfiConverterULong.lower(`nonce`),
         FfiConverterULong.lower(`feeRate`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Ingest and store a verified hybrid block header into local storage.
+         */
+    @Throws(LightFfiException::class) fun `storeVerifiedBlockHeader`(`dbPath`: kotlin.String, `headerJson`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_store_verified_block_header(
+    
+        
+        FfiConverterString.lower(`dbPath`),
+        FfiConverterString.lower(`headerJson`),_status)
 }
     )
     }
