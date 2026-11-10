@@ -86,4 +86,12 @@ class NodePowTest {
         // if uniffi native lib is not loaded, runCatching caught it and returned null. In either case, it must not throw!
         assertTrue(sim == null || !sim.success)
     }
+
+    @Test
+    fun node_store_local_rpc_status_defaults_to_false() {
+        assertFalse(NodeStore.isLocalRpcActive())
+        val snap = NodeRuntime.Snapshot()
+        assertEquals("http://127.0.0.1:8545", snap.rpcUrl)
+        assertFalse(snap.rpcRunning)
+    }
 }

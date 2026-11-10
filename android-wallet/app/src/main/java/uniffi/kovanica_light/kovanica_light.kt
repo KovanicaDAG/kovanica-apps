@@ -712,6 +712,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_import_wallet(
     ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_is_local_rpc_server_running(
+    ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_lock(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_prune_local_node_storage(
@@ -741,6 +743,10 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_kovanica_light_ffi_checksum_func_sign_witness_raw(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_simulate_local_call(
+    ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_start_local_rpc_server(
+    ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_stop_local_rpc_server(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_store_verified_block_header(
     ): Int
@@ -811,6 +817,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_import_wallet(`mnemonic`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_is_local_rpc_server_running(uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     external fun uniffi_kovanica_light_ffi_fn_func_lock(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_kovanica_light_ffi_fn_func_prune_local_node_storage(`dbPath`: RustBuffer.ByValue,`cutoffRound`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -841,6 +849,10 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_simulate_local_call(`dbPath`: RustBuffer.ByValue,`callerAddress`: RustBuffer.ByValue,`contractAddress`: RustBuffer.ByValue,`method`: RustBuffer.ByValue,`argsHex`: RustBuffer.ByValue,`value`: Long,`gasLimit`: Long,`chainId`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_start_local_rpc_server(`dbPath`: RustBuffer.ByValue,`bindAddr`: RustBuffer.ByValue,`chainId`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_stop_local_rpc_server(uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     external fun uniffi_kovanica_light_ffi_fn_func_store_verified_block_header(`dbPath`: RustBuffer.ByValue,`headerJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_kovanica_light_ffi_fn_func_sync_block_headers_batch(`dbPath`: RustBuffer.ByValue,`headersJson`: RustBuffer.ByValue,`expectedChainId`: Long,`nowMs`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1036,6 +1048,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_kovanica_light_ffi_checksum_func_import_wallet() != 17509) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_is_local_rpc_server_running() != 30066) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_lock() != 53030) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1079,6 +1094,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_simulate_local_call() != 25377) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_start_local_rpc_server() != 43829) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_stop_local_rpc_server() != 65304) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_store_verified_block_header() != 55102) {
@@ -2750,6 +2771,19 @@ public object FfiConverterSequenceTypeLocalExecutionReceipt: FfiConverterRustBuf
     
 
         /**
+         * Check if the local embedded mobile RPC server is currently running.
+         */ fun `isLocalRpcServerRunning`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_is_local_rpc_server_running(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
          * Lock the session (memory clearing barrier).
          */ fun `lock`()
         = 
@@ -3066,6 +3100,38 @@ public object FfiConverterSequenceTypeLocalExecutionReceipt: FfiConverterRustBuf
         FfiConverterULong.lower(`value`),
         FfiConverterULong.lower(`gasLimit`),
         FfiConverterULong.lower(`chainId`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Start an embedded HTTP JSON-RPC server on the mobile device (default: 127.0.0.1:8545),
+         * serving verified state directly from local storage.
+         */
+    @Throws(LightFfiException::class) fun `startLocalRpcServer`(`dbPath`: kotlin.String, `bindAddr`: kotlin.String, `chainId`: kotlin.ULong): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_start_local_rpc_server(
+    
+        
+        FfiConverterString.lower(`dbPath`),
+        FfiConverterString.lower(`bindAddr`),
+        FfiConverterULong.lower(`chainId`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Stop the local embedded mobile RPC server if active.
+         */
+    @Throws(LightFfiException::class) fun `stopLocalRpcServer`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_stop_local_rpc_server(
+    
+        _status)
 }
     )
     }

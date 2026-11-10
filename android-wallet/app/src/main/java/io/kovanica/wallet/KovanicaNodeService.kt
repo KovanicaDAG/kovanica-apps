@@ -91,6 +91,9 @@ class KovanicaNodeService : Service() {
         worker.start()
         thread = worker
         handler = Handler(worker.looper)
+        runCatching {
+            NodeStore.startLocalRpc(this, "127.0.0.1:8545", chainId)
+        }
         handler?.post { tick() }
     }
 
@@ -99,6 +102,9 @@ class KovanicaNodeService : Service() {
         thread?.quitSafely()
         thread = null
         handler = null
+        runCatching {
+            NodeStore.stopLocalRpc()
+        }
     }
 
     private fun tick() {
@@ -134,6 +140,8 @@ class KovanicaNodeService : Service() {
             } else {
                 "idle"
             },
+            rpcUrl = "http://${profile.localRpcBind}",
+            rpcRunning = NodeStore.isLocalRpcActive(),
         )
         if (!allowsSync(NodePrefs.wifiAndChargingOnly(this))) {
             NodeRuntime.publish(this, base.copy(phase = NodeRuntime.PHASE_PAUSED, note = "Paused until the phone is on unmetered Wi-Fi and charging."))
@@ -282,6 +290,8 @@ object NodeRuntime {
         val intervalLine: String = "Recent block interval: —",
         val intervalTone: String = "idle",
         val stateRoot: String = "—",
+        val rpcUrl: String = "http://127.0.0.1:8545",
+        val rpcRunning: Boolean = false,
     )
 
     @Volatile
@@ -383,6 +393,24 @@ object NodeStore {
         return runCatching {
             uniffi.kovanica_light.executeBlockTransactions(localDbPath(context), blockJson, chainId)
         }.getOrNull()
+    }
+
+    fun startLocalRpc(context: Context, bindAddr: String = "127.0.0.1:8545", chainId: ULong = 5uL): String? {
+        return runCatching {
+            uniffi.kovanica_light.startLocalRpcServer(localDbPath(context), bindAddr, chainId)
+        }.getOrNull()
+    }
+
+    fun stopLocalRpc(): Boolean {
+        return runCatching {
+            uniffi.kovanica_light.stopLocalRpcServer()
+        }.getOrDefault(false)
+    }
+
+    fun isLocalRpcActive(): Boolean {
+        return runCatching {
+            uniffi.kovanica_light.isLocalRpcServerRunning()
+        }.getOrDefault(false)
     }
 
     fun save(context: Context, round: Long, headerJson: String): Int {
