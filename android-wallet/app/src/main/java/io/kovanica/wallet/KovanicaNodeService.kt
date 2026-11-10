@@ -19,6 +19,7 @@ import org.json.JSONObject
 import uniffi.kovanica_light.defaultMobileNodeConfig
 import uniffi.kovanica_light.verifyPowHeaderChainJson
 import uniffi.kovanica_light.verifyPowHeaderJson
+import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -157,7 +158,9 @@ class KovanicaNodeService : Service() {
                     verifyPowHeaderChainJson(HYBRID_CHAIN, "[$parent,${header}]", now)
                 }.getOrDefault(verified.work)
             }
-            val remembered = NodeStore.note(this, verified.round.toLong())
+            val parentRound = parentRound(parent)
+            if (parentRound != null) NodeStore.save(this, parentRound, parent)
+            val remembered = NodeStore.save(this, verified.round.toLong(), header.toString())
             NodeRuntime.publish(
                 this,
                 base.copy(
@@ -175,6 +178,12 @@ class KovanicaNodeService : Service() {
             NodeRuntime.publish(this, base.copy(note = error.message ?: "The header check failed."))
         }
         schedule()
+    }
+
+    private fun parentRound(parent: String): Long? {
+        if (parent.isBlank()) return null
+        val round = runCatching { JSONObject(parent).optLong("round", -1L) }.getOrDefault(-1L)
+        return round.takeIf { it >= 0L }
     }
 
     private fun schedule() {
@@ -261,30 +270,36 @@ object NodePrefs {
     }
 }
 
-/** Counts verified tips inside the 14,400-round window and measures any local db files. */
+/** Verified headers on disk under filesDir/headers, pruned to the last 14,400 rounds. */
 object NodeStore {
     const val BADGE = "Pruning window: 14,400 rounds (~16h)"
-    private const val KEY = "verified_header_rounds"
 
-    fun count(context: Context): Int = read(context).size
+    fun count(context: Context): Int {
+        val dir = File(context.filesDir, "headers")
+        if (!dir.isDirectory) return 0
+        return dir.listFiles()?.count { roundOf(it) != null } ?: 0
+    }
 
-    fun note(context: Context, round: Long): Int {
-        val kept = AirgapReview.retain(read(context), round)
-        context.getSharedPreferences(NetworkPrefs.PREFS, Context.MODE_PRIVATE)
-            .edit()
-            .putString(KEY, kept.sorted().joinToString(","))
-            .apply()
+    fun save(context: Context, round: Long, headerJson: String): Int {
+        val dir = File(context.filesDir, "headers").apply { mkdirs() }
+        write(dir, round, headerJson)
+        val files = dir.listFiles().orEmpty()
+        val kept = AirgapReview.retain(files.mapNotNull { roundOf(it) }.toSet(), round)
+        files.forEach { file ->
+            val stored = roundOf(file) ?: return@forEach
+            if (stored !in kept) file.delete()
+        }
         return kept.size
     }
 
     fun databaseBytes(context: Context): Long {
+        var total = treeBytes(File(context.filesDir, "headers"))
         val dirs = listOfNotNull(
             context.filesDir,
             context.noBackupFilesDir,
             context.getExternalFilesDir(null),
             context.getDatabasePath("kovanica").parentFile,
         )
-        var total = 0L
         val seen = HashSet<String>()
         for (dir in dirs) {
             if (!seen.add(dir.absolutePath) || !dir.isDirectory) continue
@@ -298,8 +313,28 @@ object NodeStore {
         return total
     }
 
-    private fun read(context: Context): Set<Long> {
-        val raw = context.getSharedPreferences(NetworkPrefs.PREFS, Context.MODE_PRIVATE).getString(KEY, "").orEmpty()
-        return raw.split(',').mapNotNull { it.toLongOrNull() }.toSet()
+    private fun write(dir: File, round: Long, json: String) {
+        val target = File(dir, "$round.json")
+        val tmp = File(dir, ".$round.json.tmp")
+        tmp.writeText(json)
+        if (target.exists() && !target.delete()) tmp.delete()
+        if (!tmp.renameTo(target)) {
+            target.writeText(json)
+            tmp.delete()
+        }
+    }
+
+    private fun roundOf(file: File): Long? {
+        if (!file.isFile || !file.name.endsWith(".json") || file.name.startsWith(".")) return null
+        return file.name.removeSuffix(".json").toLongOrNull()
+    }
+
+    private fun treeBytes(dir: File): Long {
+        if (!dir.isDirectory) return 0L
+        var total = 0L
+        dir.listFiles()?.forEach { file ->
+            total += if (file.isDirectory) treeBytes(file) else file.length()
+        }
+        return total
     }
 }

@@ -31,7 +31,18 @@ object AirgapReview {
 
     fun retain(rounds: Set<Long>, tip: Long, window: Long = 14_400L): Set<Long> {
         if (window <= 0L) return setOf(tip)
-        return rounds.filter { it <= tip && tip - it < window }.toSet() + tip
+        return rounds.filter { it <= tip && tip - it <= window }.toSet() + tip
+    }
+
+    fun footprint(bytes: Long, limitMb: Long = 64): String = "${humanBytes(bytes)} / $limitMb MiB limit"
+
+    fun humanBytes(bytes: Long): String {
+        if (bytes <= 0L) return "0 B"
+        if (bytes < 1024L) return "$bytes B"
+        val kb = (bytes + 512L) / 1024L
+        if (kb < 1024L) return "$kb KB"
+        val mb = (bytes + (512L * 1024L)) / (1024L * 1024L)
+        return "$mb MiB"
     }
 
     private fun argsSummary(args: String): String {

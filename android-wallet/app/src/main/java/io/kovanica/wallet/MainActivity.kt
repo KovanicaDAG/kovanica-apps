@@ -1868,13 +1868,14 @@ class MainActivity : Activity() {
             "local RPC ${snapshot.bind}\n" +
             "${snapshot.pruningBadge}\n" +
             "Verified headers in window: ${snapshot.headerCount}\n" +
-            "Local DB: ${dbLabel(snapshot.storeBytes)}\n" +
+            "Local DB: ${dbLabel(snapshot.storeBytes, snapshot.cacheMb)}\n" +
             snapshot.note
     }
 
-    private fun dbLabel(bytes: String): String {
-        if (bytes == "0") return "0 B — no redb or sqlite file. Older block bodies are not kept, so this stays under 250 MB."
-        return "$bytes B"
+    private fun dbLabel(bytes: String, limitMb: String): String {
+        val size = bytes.toLongOrNull() ?: 0L
+        val limit = limitMb.toLongOrNull() ?: 64L
+        return AirgapReview.footprint(size, limit)
     }
 
     private fun chainPreview(): String =

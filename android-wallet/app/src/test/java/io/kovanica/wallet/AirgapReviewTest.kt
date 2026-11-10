@@ -51,9 +51,15 @@ class AirgapReviewTest {
     @Test
     fun pruning_window_keeps_fourteen_thousand_four_hundred_rounds() {
         val tip = 20_000L
-        val kept = AirgapReview.retain(setOf(tip - 14_400L, tip - 14_399L, tip), tip)
-        assertFalse(kept.contains(tip - 14_400L))
-        assertTrue(kept.contains(tip - 14_399L))
+        val kept = AirgapReview.retain(setOf(tip - 14_401L, tip - 14_400L, tip), tip)
+        assertFalse(kept.contains(tip - 14_401L))
+        assertTrue(kept.contains(tip - 14_400L))
         assertEquals(2, kept.size)
+    }
+
+    @Test
+    fun footprint_uses_the_cache_limit() {
+        assertEquals("0 B / 64 MiB limit", AirgapReview.footprint(0))
+        assertEquals("240 KB / 64 MiB limit", AirgapReview.footprint(240L * 1024L))
     }
 }

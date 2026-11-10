@@ -74,6 +74,9 @@ export function ConfirmTx({
           >
             Show air-gap QR
           </button>
+          <button type="button" className="mt-3 ml-2 min-h-11 rounded-full border border-line px-4 text-sm text-paper" onClick={() => downloadUnsigned(unsigned, preview.nonce)}>
+            Download unsigned JSON
+          </button>
           {payload ? (
             <div className="mt-3 grid gap-3">
               {qr ? <img src={qr} alt="Unsigned transaction QR" className="h-56 w-56 rounded-2xl bg-paper p-2" /> : <p className="text-sm text-muted">The payload is below if it does not fit in a QR.</p>}
@@ -100,6 +103,17 @@ export function ConfirmTx({
       </div>
     </div>
   );
+}
+
+function downloadUnsigned(json: string, nonce: string) {
+  const safe = nonce.replace(/[^\d]/g, "") || "0";
+  const blob = new Blob([json], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `kovanica-tx-unsigned-${safe}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 type DetectedCode = { rawValue?: string };

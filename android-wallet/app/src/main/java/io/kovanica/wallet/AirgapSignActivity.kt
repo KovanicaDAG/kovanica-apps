@@ -2,6 +2,7 @@ package io.kovanica.wallet
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
@@ -42,6 +43,8 @@ class AirgapSignActivity : Activity() {
     private lateinit var bip39Field: EditText
     private lateinit var accountField: EditText
     private lateinit var clearButton: Button
+    private lateinit var form: LinearLayout
+    private var active: JSONObject? = null
     private val hideSigned = Runnable { clearSigned("Signed QR hidden. Nothing was broadcast.") }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -51,7 +54,6 @@ class AirgapSignActivity : Activity() {
         window.statusBarColor = WalletUi.INK
 
         val payload = intent.getStringExtra(EXTRA_PAYLOAD).orEmpty()
-        val doc = runCatching { JSONObject(payload) }.getOrNull()
         status = TextView(this).apply {
             setTextColor(WalletUi.TEXT)
             textSize = 14f
@@ -70,6 +72,14 @@ class AirgapSignActivity : Activity() {
         }
         clearButton = WalletUi.button(this, "Clear signed QR", filled = false) { clearSigned("Signed QR cleared. Nothing was broadcast.") }
         clearButton.visibility = View.GONE
+        form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            addView(passField, gap())
+            addView(bip39Field, gap())
+            addView(accountField, gap())
+            addView(WalletUi.button(this@AirgapSignActivity, "Review & sign") { review() }, gap())
+        }
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -78,27 +88,13 @@ class AirgapSignActivity : Activity() {
         }
         root.addView(title())
         root.addView(status, gap())
-        when {
-            doc == null || doc.optInt("v") != 1 || doc.optString("role") != "unsigned" || !doc.has("chainId") -> {
-                status.text = "That code is not an unsigned Kovanica transaction."
-            }
-            !AirgapReview.matches(doc.getLong("chainId"), NetworkPrefs.chainId(this)) -> {
-                val message = AirgapReview.refusal(doc.getLong("chainId"), NetworkPrefs.chainId(this))
-                status.text = message
-                Toast.makeText(this, message, Toast.LENGTH_LONG).show()
-            }
-            else -> {
-                status.text = AirgapReview.lines(doc).joinToString("\n")
-                root.addView(passField, gap())
-                root.addView(bip39Field, gap())
-                root.addView(accountField, gap())
-                root.addView(WalletUi.button(this, "Review & sign") { review(doc) }, gap())
-            }
-        }
+        root.addView(WalletUi.button(this, "Load unsigned JSON", filled = false) { pickUnsigned() }, gap())
+        root.addView(form, gap())
         root.addView(qr, gap())
         root.addView(signedText, gap())
         root.addView(clearButton, gap())
         setContentView(ScrollView(this).apply { addView(root) })
+        present(payload, announce = payload.isNotBlank())
     }
 
     override fun onDestroy() {
@@ -107,11 +103,62 @@ class AirgapSignActivity : Activity() {
         super.onDestroy()
     }
 
-    private fun review(doc: JSONObject) {
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != OPEN_JSON || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        val text = runCatching {
+            contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+        }.getOrNull()
+        if (text.isNullOrBlank() || text.length > 256_000) {
+            active = null
+            form.visibility = View.GONE
+            status.text = "That file is not a readable unsigned transaction."
+            return
+        }
+        present(text, announce = true)
+    }
+
+    private fun pickUnsigned() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/json", "text/plain", "application/octet-stream"))
+        }
+        startActivityForResult(intent, OPEN_JSON)
+    }
+
+    private fun present(payload: String, announce: Boolean) {
+        val doc = runCatching { JSONObject(payload) }.getOrNull()
+        active = null
+        form.visibility = View.GONE
+        when {
+            doc == null || doc.optInt("v") != 1 || doc.optString("role") != "unsigned" || !doc.has("chainId") -> {
+                status.text = if (payload.isBlank()) {
+                    "Scan a QR or load kovanica-tx-unsigned.json from Downloads."
+                } else {
+                    "That is not an unsigned Kovanica transaction."
+                }
+            }
+            !AirgapReview.matches(doc.getLong("chainId"), NetworkPrefs.chainId(this)) -> {
+                val message = AirgapReview.refusal(doc.getLong("chainId"), NetworkPrefs.chainId(this))
+                status.text = message
+                if (announce) Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+            }
+            else -> {
+                active = doc
+                form.visibility = View.VISIBLE
+                status.text = AirgapReview.lines(doc).joinToString("\n")
+            }
+        }
+    }
+
+    private fun review() {
         if (passField.text.toString().isEmpty()) {
             status.text = "Enter the wallet password. The phrase stays on this phone."
             return
         }
+        val doc = active ?: return
         AlertDialog.Builder(this)
             .setTitle(if (doc.optString("kind") == "call") "Confirm contract call" else "Confirm transfer")
             .setMessage(AirgapReview.lines(doc).joinToString("\n"))
@@ -281,5 +328,6 @@ class AirgapSignActivity : Activity() {
     companion object {
         const val EXTRA_PAYLOAD: String = "io.kovanica.wallet.AIRGAP_PAYLOAD"
         private const val PREFS: String = "kvnc"
+        private const val OPEN_JSON: Int = 41
     }
 }
