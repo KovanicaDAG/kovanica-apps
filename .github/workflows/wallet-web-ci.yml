@@ -1,0 +1,48 @@
+name: wallet-web-ci
+
+on:
+  pull_request:
+    paths:
+      - 'wallet-web/**'
+      - '.github/workflows/wallet-web-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'wallet-web/**'
+      - '.github/workflows/wallet-web-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wallet-web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-and-build:
+    name: Typecheck, Vectors & Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: wallet-web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: wallet-web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript typecheck
+        run: npm run typecheck
+
+      - name: Verify test vectors
+        run: npx tsx src/core/check-vectors.ts
+
+      - name: Build web wallet
+        run: npm run build

@@ -702,6 +702,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_lock(
     ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_prune_local_node_storage(
+    ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_registry_decode_entry(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_registry_slot_hex(
@@ -779,6 +781,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_lock(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_kovanica_light_ffi_fn_func_prune_local_node_storage(`dbPath`: RustBuffer.ByValue,`cutoffRound`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_registry_decode_entry(`valueHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_registry_slot_hex(`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -975,6 +979,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_lock() != 53030) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_prune_local_node_storage() != 39694) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_registry_decode_entry() != 1486) {
@@ -1529,6 +1536,61 @@ public object FfiConverterTypeMobileNodeProfile: FfiConverterRustBuffer<MobileNo
 
 
 /**
+ * Summary of records pruned from local embedded storage.
+ */
+data class PrunedStorageSummary (
+    /**
+     * Number of blocks pruned from the block store.
+     */
+    var `prunedBlocks`: kotlin.ULong
+    , 
+    /**
+     * Number of DAG blocks pruned from the consensus store.
+     */
+    var `prunedDagBlocks`: kotlin.ULong
+    , 
+    /**
+     * True if the database existed and pruning succeeded.
+     */
+    var `pruned`: kotlin.Boolean
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypePrunedStorageSummary: FfiConverterRustBuffer<PrunedStorageSummary> {
+    override fun read(buf: ByteBuffer): PrunedStorageSummary {
+        return PrunedStorageSummary(
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: PrunedStorageSummary) = (
+            FfiConverterULong.allocationSize(value.`prunedBlocks`) +
+            FfiConverterULong.allocationSize(value.`prunedDagBlocks`) +
+            FfiConverterBoolean.allocationSize(value.`pruned`)
+    )
+
+    override fun write(value: PrunedStorageSummary, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`prunedBlocks`, buf)
+            FfiConverterULong.write(value.`prunedDagBlocks`, buf)
+            FfiConverterBoolean.write(value.`pruned`, buf)
+    }
+}
+
+
+
+/**
  * A sealed header this client accepted.
  */
 data class VerifiedHeader (
@@ -2070,6 +2132,25 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         _status)
 }
     
+    
+
+        /**
+         * Prune local node storage below the cutoff round.
+         *
+         * Keeps account states, staking, and contract code while dropping DAG blocks,
+         * block bodies, and votes older than `cutoff_round`.
+         */
+    @Throws(LightFfiException::class) fun `pruneLocalNodeStorage`(`dbPath`: kotlin.String, `cutoffRound`: kotlin.ULong): PrunedStorageSummary {
+            return FfiConverterTypePrunedStorageSummary.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_prune_local_node_storage(
+    
+        
+        FfiConverterString.lower(`dbPath`),
+        FfiConverterULong.lower(`cutoffRound`),_status)
+}
+    )
+    }
     
 
         /**

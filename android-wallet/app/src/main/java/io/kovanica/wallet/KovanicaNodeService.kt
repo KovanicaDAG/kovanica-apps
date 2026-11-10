@@ -319,7 +319,34 @@ object NodeStore {
             val stored = roundOf(file) ?: return@forEach
             if (stored !in kept) file.delete()
         }
+        pruneEmbeddedDatabases(context, round)
         return kept.size
+    }
+
+    fun pruneEmbeddedDatabases(context: Context, currentRound: Long): Long {
+        if (currentRound <= 14_400L) return 0L
+        val cutoff = (currentRound - 14_400L).toULong()
+        var totalPruned = 0L
+        val candidateDirs = listOfNotNull(
+            context.filesDir,
+            context.noBackupFilesDir,
+            context.getDatabasePath("kovanica").parentFile,
+        )
+        val seen = HashSet<String>()
+        for (dir in candidateDirs) {
+            if (!seen.add(dir.absolutePath) || !dir.isDirectory) continue
+            dir.listFiles()?.forEach { file ->
+                if (file.isFile && file.name.lowercase().endsWith(".redb")) {
+                    runCatching {
+                        val summary = uniffi.kovanica_light.pruneLocalNodeStorage(file.absolutePath, cutoff)
+                        if (summary.pruned) {
+                            totalPruned += (summary.prunedBlocks + summary.prunedDagBlocks).toLong()
+                        }
+                    }
+                }
+            }
+        }
+        return totalPruned
     }
 
     fun recentTimestamps(context: Context, limit: Int = 32): List<Long> {
