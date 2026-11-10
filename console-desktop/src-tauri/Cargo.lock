@@ -2323,6 +2323,7 @@ dependencies = [
  "kovanica-keystore",
  "kovanica-light",
  "kovanica-name-registry",
+ "kovanica-storage",
  "kovanica-types",
  "kovanica-wallet-core",
  "serde_json",
@@ -2343,6 +2344,34 @@ dependencies = [
 [[package]]
 name = "kovanica-params"
 version = "0.2.0"
+
+[[package]]
+name = "kovanica-staking"
+version = "0.0.31"
+dependencies = [
+ "bincode",
+ "kovanica-params",
+ "kovanica-types",
+ "serde",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "kovanica-storage"
+version = "0.0.31"
+dependencies = [
+ "bincode",
+ "blake3",
+ "hex",
+ "kovanica-crypto",
+ "kovanica-staking",
+ "kovanica-types",
+ "redb",
+ "serde",
+ "thiserror 1.0.69",
+ "tracing",
+]
 
 [[package]]
 name = "kovanica-types"
@@ -3400,6 +3429,15 @@ name = "raw-window-handle"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
+
+[[package]]
+name = "redb"
+version = "2.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d64e07496d293ad8ed401c4d193d5b9f0f97671fbd5bf21d691a0c7d2c53dc8"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "redox_syscall"

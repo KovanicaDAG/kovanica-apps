@@ -6,6 +6,8 @@ import { buildContractCall } from "./contracts";
 import { bip39Seed, deriveBip44, deriveHardened, entropyFromPhrase, generatePhrase, hdPrivateKey, isValidMnemonic, masterFromSeed } from "./hd";
 import { encodeRawTransaction, publicKeyFromSeed, signHash, signingHash } from "./tx";
 import { formatRemaining, remainingMs } from "./idle";
+import { faucetChain } from "./faucet";
+import { quizMatches, quizPositions } from "./quiz";
 
 const seed = new Uint8Array(32).fill(0x07);
 const sender = publicKeyFromSeed(seed);
@@ -182,5 +184,11 @@ if (remainingMs(15, 1_000, 1_000 + 15 * 60_000) !== 0) throw new Error("15m idle
 if (remainingMs(60, 0, 1_000) !== 60 * 60_000 - 1_000) throw new Error("60m idle countdown");
 if (formatRemaining(61_000) !== "1:01") throw new Error("countdown format");
 if (formatRemaining(0) !== "0:00") throw new Error("countdown zero");
+if (!faucetChain(5) || !faucetChain(3) || !faucetChain(1337) || faucetChain(1)) throw new Error("faucet chain gate");
+const sample = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x"];
+if (quizPositions(24).join() !== "3,8,14") throw new Error("24-word quiz positions");
+if (quizPositions(12).join() !== "3,8,12") throw new Error("12-word quiz positions");
+if (!quizMatches(sample, { 3: "c", 8: "h", 14: "n" })) throw new Error("quiz should accept the right words");
+if (quizMatches(sample, { 3: "a", 8: "h", 14: "n" })) throw new Error("quiz should reject a wrong word");
 
 console.log("vectors ok", address);

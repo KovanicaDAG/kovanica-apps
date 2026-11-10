@@ -48,6 +48,11 @@
         <div id="wallet-absent">
           <label for="new-password">New password</label>
           <input id="new-password" type="password" autocomplete="new-password" />
+          <label for="create-words">Phrase length</label>
+          <select id="create-words">
+            <option value="24" selected>24 words</option>
+            <option value="12">12 words</option>
+          </select>
           <div class="row">
             <button id="create-wallet" type="button">Create key</button>
           </div>
@@ -64,6 +69,13 @@
           <p id="mnemonic-lock-warning" class="warning" role="alert" hidden></p>
           <p id="mnemonic-warning" class="warning"></p>
           <p id="mnemonic-text" class="phrase"></p>
+          <div id="mnemonic-quiz" hidden>
+            <p id="quiz-prompt" class="warning"></p>
+            <div id="quiz-slots"></div>
+            <div class="row">
+              <button id="quiz-confirm" type="button">Confirm words</button>
+            </div>
+          </div>
           <div class="row">
             <button id="mnemonic-done" type="button">I have saved this phrase</button>
           </div>
@@ -86,6 +98,7 @@
           <div class="row">
             <button id="lock-wallet" type="button">Lock</button>
             <button id="refresh-wallet" type="button">Refresh</button>
+            <button id="claim-faucet" type="button" hidden>Request Testnet KVNC</button>
           </div>
           <p id="open-backup" class="muted"></p>
           <label for="open-password">Password</label>
@@ -112,6 +125,9 @@
           <h3 id="history-heading">History (reported by node)</h3>
           <p id="history-empty" class="muted">No transfers reported by the node.</p>
           <ul id="history" class="history"></ul>
+        </div>
+        <div class="row">
+          <button id="export-backup" type="button">Export Encrypted Backup (JSON)</button>
         </div>
       </section>
     </main>

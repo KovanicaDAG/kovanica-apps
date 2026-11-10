@@ -15,6 +15,7 @@ import { Contracts } from "@/components/contracts/Contracts";
 import { Onboarding } from "@/components/onboarding/Onboarding";
 import { Receive } from "@/components/receive/Receive";
 import { SendForm } from "@/components/send/SendForm";
+import { FaucetButton } from "@/components/home/FaucetButton";
 import { NetworkChoices } from "@/components/settings/NetworkChoices";
 import { SettingsDrawer } from "@/components/settings/SettingsDrawer";
 import { Watchlist } from "@/components/watch/Watchlist";
@@ -292,6 +293,7 @@ export function WalletApp() {
               {session.kind === "legacy" ? <p className="w-fit rounded-full border border-copper px-3 py-1 text-sm text-copper">Legacy account</p> : null}
               <p className="text-5xl font-semibold tabular-nums">{net.balanceAtoms == null ? "—" : formatKvnc(net.balanceAtoms)}</p>
               <p className="text-muted">{net.balanceAtoms == null ? "Balance unavailable" : `${formatAtoms(net.balanceAtoms)} atoms`}</p>
+              {account ? <FaucetButton address={account.address} /> : null}
               <p className="mono text-sm break-all">{account?.address}</p>
               <div className="flex gap-3">
                 <button type="button" className="min-h-11 rounded-full bg-copper px-5 font-medium text-copper-ink" onClick={() => setTab("send")}>Send</button>

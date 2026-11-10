@@ -18,8 +18,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use connection::{
-    endpoint_label, fetch_status, read_saved_url, resolve_rpc_url, write_saved_url, HttpRpc,
-    NodeStatus, RPC_URL_ENV,
+    airdrop_hash, endpoint_label, faucet_chain_id, fetch_status, read_saved_url, resolve_rpc_url,
+    write_saved_url, HttpRpc, NodeStatus, Rpc, RPC_URL_ENV,
 };
 use serde::Serialize;
 use std::time::Instant;
@@ -562,6 +562,71 @@ fn parse_atom_string(text: &str) -> Result<u64, String> {
         .map_err(|_| "That amount is larger than KUNA can send.".to_string())
 }
 
+/// Ask the node for 100 KVNC. Refused on mainnet.
+#[tauri::command]
+async fn wallet_request_airdrop(
+    app: tauri::AppHandle,
+    state: State<'_, WalletApp>,
+) -> Result<String, String> {
+    let url = current_url(&app)?;
+    let path = wallet_file(&app)?;
+    let address = with_wallet(&state, |store| {
+        store
+            .status(&path, Instant::now())?
+            .address
+            .ok_or_else(|| "Unlock the wallet before requesting testnet KVNC.".to_string())
+    })?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let rpc = HttpRpc::new(url.clone()).map_err(|err| err.to_string())?;
+        let status = fetch_status(&rpc, &url).map_err(|err| err.to_string())?;
+        let sync = rpc
+            .call("kovanica_syncStatus", serde_json::json!([]))
+            .map_err(|err| err.to_string())?;
+        if faucet_chain_id(status.chain_id.as_deref(), &sync).is_none() {
+            return Err("The faucet is not available on this chain.".to_string());
+        }
+        let result = rpc
+            .call(
+                "kovanica_requestAirdrop",
+                serde_json::json!([address, "100000000000"]),
+            )
+            .map_err(|err| err.to_string())?;
+        airdrop_hash(&result).ok_or_else(|| "The faucet did not return a transaction hash.".to_string())
+    })
+    .await
+    .map_err(|_| "The faucet request was interrupted.".to_string())?
+}
+
+/// Chain the testnet faucet may credit, or nothing on mainnet and chain 4.
+#[tauri::command]
+async fn wallet_faucet_chain(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let url = current_url(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let rpc = HttpRpc::new(url.clone()).map_err(|err| err.to_string())?;
+        let status = fetch_status(&rpc, &url).map_err(|err| err.to_string())?;
+        let sync = rpc
+            .call("kovanica_syncStatus", serde_json::json!([]))
+            .map_err(|err| err.to_string())?;
+        Ok(faucet_chain_id(status.chain_id.as_deref(), &sync))
+    })
+    .await
+    .map_err(|_| "The faucet request was interrupted.".to_string())?
+}
+
+/// Encrypted keystore only. The recovery phrase is not in this file.
+#[tauri::command]
+fn wallet_export_backup(app: tauri::AppHandle) -> Result<String, String> {
+    let path = wallet_file(&app)?;
+    let text = std::fs::read_to_string(&path)
+        .map_err(|_| "Create a wallet before exporting a backup.".to_string())?;
+    let keystore: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|_| "The keystore could not be read.".to_string())?;
+    if keystore.get("mnemonic").is_some() || keystore.get("phrase").is_some() {
+        return Err("Refusing to export a file that contains a recovery phrase.".to_string());
+    }
+    Ok(serde_json::json!({ "version": 1, "keystore": keystore }).to_string())
+}
+
 /// Chain id, height, leader round, epoch, and peers. Fails with a clear error
 /// when the node cannot be reached.
 #[tauri::command]
@@ -632,7 +697,10 @@ fn main() {
             wallet_quote,
             wallet_send,
             wallet_balance,
-            wallet_history
+            wallet_history,
+            wallet_request_airdrop,
+            wallet_faucet_chain,
+            wallet_export_backup
         ])
         .run(tauri::generate_context!())
         .expect("error while running Kovanica Console");

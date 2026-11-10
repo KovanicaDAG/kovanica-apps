@@ -88,7 +88,7 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
         <p className="mt-3 text-sm text-paper">{status === "unlocked" ? `Locks in ${formatRemaining(left)}` : "Wallet is locked."}</p>
         <h3 className="mt-8 text-sm tracking-wide text-muted uppercase">Backup</h3>
         <p className="mt-2 text-sm text-muted">Exports the encrypted keystore from this browser, plus contacts and the watchlist. The phrase is not in the file.</p>
-        <button type="button" className="mt-3 min-h-11 rounded-full border border-line px-4 text-paper" onClick={download}>Export backup</button>
+        <button type="button" className="mt-3 min-h-11 rounded-full border border-line px-4 text-paper" onClick={download}>Export Encrypted Backup (JSON)</button>
         <label className="mt-3 grid gap-1 text-sm text-muted">
           Import backup
           <input
