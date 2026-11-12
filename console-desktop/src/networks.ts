@@ -13,12 +13,12 @@ export interface NetworkPreset {
   rpcUrl: string;
 }
 
-/** Chain ids: mainnet 1, public testnet 4, local 1337. */
+/** Chain ids: mainnet 1, public testnet 2, local 1337. */
 export const NETWORK_PRESETS: readonly NetworkPreset[] = [
   {
     id: "testnet",
-    label: "Testnet (Chain 4)",
-    chainId: 4,
+    label: "Testnet (Chain 2)",
+    chainId: 2,
     rpcUrl: "https://rpc-testnet.kovanica.online/rpc",
   },
   {

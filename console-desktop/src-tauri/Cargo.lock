@@ -1036,12 +1036,18 @@ checksum = "fac5fca71e65e94cc718a6e2af65d6e0f9c6027751c2aa562fbb5087fda639bc"
 dependencies = [
  "bit-set",
  "cssparser",
- "foldhash",
+ "foldhash 0.2.0",
  "html5ever",
  "precomputed-hash",
  "selectors",
  "tendril",
 ]
+
+[[package]]
+name = "downcast-rs"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
 name = "dpi"
@@ -1218,6 +1224,12 @@ name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
+
+[[package]]
+name = "foldhash"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
 name = "foldhash"
@@ -1665,6 +1677,15 @@ name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
+
+[[package]]
+name = "hashbrown"
+version = "0.15.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
+dependencies = [
+ "foldhash 0.1.5",
+]
 
 [[package]]
 name = "hashbrown"
@@ -2246,6 +2267,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "kovanica-consensus"
+version = "0.0.31"
+dependencies = [
+ "async-trait",
+ "kovanica-crypto",
+ "kovanica-dag",
+ "kovanica-mempool",
+ "kovanica-params",
+ "kovanica-staking",
+ "kovanica-storage",
+ "kovanica-types",
+ "once_cell",
+ "parking_lot",
+ "prometheus-client",
+ "rand 0.8.8",
+ "serde",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "kovanica-console"
 version = "0.1.0"
 dependencies = [
@@ -2277,6 +2320,75 @@ dependencies = [
  "rand 0.8.8",
  "serde",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "kovanica-dag"
+version = "0.2.0"
+dependencies = [
+ "bincode",
+ "kovanica-crypto",
+ "kovanica-params",
+ "kovanica-storage",
+ "kovanica-types",
+ "parking_lot",
+ "redb",
+ "serde",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "kovanica-escrow"
+version = "0.2.0"
+dependencies = [
+ "bincode",
+ "kovanica-common",
+ "serde",
+]
+
+[[package]]
+name = "kovanica-execution"
+version = "0.2.0"
+dependencies = [
+ "bincode",
+ "kovanica-common",
+ "kovanica-consensus",
+ "kovanica-crypto",
+ "kovanica-escrow",
+ "kovanica-fee",
+ "kovanica-htlc",
+ "kovanica-multisig",
+ "kovanica-nft",
+ "kovanica-params",
+ "kovanica-runtime",
+ "kovanica-staking",
+ "kovanica-storage",
+ "kovanica-token",
+ "kovanica-types",
+ "kovanica-vault",
+ "redb",
+ "serde",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "kovanica-fee"
+version = "0.2.0"
+dependencies = [
+ "kovanica-params",
+ "kovanica-types",
+]
+
+[[package]]
+name = "kovanica-htlc"
+version = "0.2.0"
+dependencies = [
+ "bincode",
+ "kovanica-common",
+ "serde",
 ]
 
 [[package]]
@@ -2320,16 +2432,41 @@ dependencies = [
  "kovanica-comms-crypto",
  "kovanica-comms-relay",
  "kovanica-crypto",
+ "kovanica-execution",
  "kovanica-keystore",
  "kovanica-light",
  "kovanica-name-registry",
  "kovanica-storage",
  "kovanica-types",
  "kovanica-wallet-core",
+ "redb",
  "serde_json",
  "thiserror 1.0.69",
  "uniffi",
  "zeroize",
+]
+
+[[package]]
+name = "kovanica-mempool"
+version = "0.2.0"
+dependencies = [
+ "bincode",
+ "kovanica-crypto",
+ "kovanica-storage",
+ "kovanica-types",
+ "parking_lot",
+ "serde",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "kovanica-multisig"
+version = "0.2.0"
+dependencies = [
+ "bincode",
+ "kovanica-common",
+ "serde",
 ]
 
 [[package]]
@@ -2342,8 +2479,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "kovanica-nft"
+version = "0.2.0"
+dependencies = [
+ "bincode",
+ "kovanica-common",
+ "serde",
+]
+
+[[package]]
 name = "kovanica-params"
 version = "0.2.0"
+
+[[package]]
+name = "kovanica-runtime"
+version = "0.2.0"
+dependencies = [
+ "bytes",
+ "kovanica-common",
+ "kovanica-fee",
+ "kovanica-params",
+ "kovanica-types",
+ "parking_lot",
+ "thiserror 1.0.69",
+ "tracing",
+ "wasmi",
+]
 
 [[package]]
 name = "kovanica-staking"
@@ -2374,6 +2535,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kovanica-token"
+version = "0.2.0"
+dependencies = [
+ "bincode",
+ "kovanica-common",
+ "serde",
+]
+
+[[package]]
 name = "kovanica-types"
 version = "0.0.31"
 dependencies = [
@@ -2385,6 +2555,15 @@ dependencies = [
  "kovanica-params",
  "serde",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "kovanica-vault"
+version = "0.2.0"
+dependencies = [
+ "bincode",
+ "kovanica-common",
+ "serde",
 ]
 
 [[package]]
@@ -2462,6 +2641,12 @@ dependencies = [
  "cfg-if",
  "winapi",
 ]
+
+[[package]]
+name = "libm"
+version = "0.2.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "libredox"
@@ -2615,6 +2800,12 @@ dependencies = [
  "thiserror 2.0.21",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "multi-stash"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "685a9ac4b61f4e728e1d2c6a7844609c16527aeb5e6c865915c08e619c16410f"
 
 [[package]]
 name = "ndk"
@@ -3239,6 +3430,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "prometheus-client"
+version = "0.25.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d150ad7bf80e60f45769d18a0a8c01028ab8f56355f33ed7bfce3a31f82e696"
+dependencies = [
+ "dtoa",
+ "itoa",
+ "parking_lot",
+ "prometheus-client-derive-encode",
+]
+
+[[package]]
+name = "prometheus-client-derive-encode"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01e34894696ff94f64a20c2c373a6440903e9c2789a303d68ec6e6f953f890e4"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -4039,6 +4253,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "signal-hook-registry"
+version = "1.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
+dependencies = [
+ "errno",
+ "libc",
+]
+
+[[package]]
 name = "signature"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4136,6 +4360,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "spin"
+version = "0.9.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
+
+[[package]]
 name = "spki"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4156,6 +4386,16 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "string-interner"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a3275464d7a9f2d4cac57c89c2ef96a8524dba2864c8d6f82e3980baf136f9b"
+dependencies = [
+ "hashbrown 0.15.5",
+ "serde",
+]
 
 [[package]]
 name = "string_cache"
@@ -4675,9 +4915,23 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
+ "parking_lot",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
+ "tokio-macros",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -5307,6 +5561,60 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "wasmi"
+version = "0.40.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a19af97fcb96045dd1d6b4d23e2b4abdbbe81723dbc5c9f016eb52145b320063"
+dependencies = [
+ "arrayvec",
+ "multi-stash",
+ "smallvec",
+ "spin",
+ "wasmi_collections",
+ "wasmi_core",
+ "wasmi_ir",
+ "wasmparser",
+]
+
+[[package]]
+name = "wasmi_collections"
+version = "0.40.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e80d6b275b1c922021939d561574bf376613493ae2b61c6963b15db0e8813562"
+dependencies = [
+ "string-interner",
+]
+
+[[package]]
+name = "wasmi_core"
+version = "0.40.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a8c51482cc32d31c2c7ff211cd2bedd73c5bd057ba16a2ed0110e7a96097c33"
+dependencies = [
+ "downcast-rs",
+ "libm",
+]
+
+[[package]]
+name = "wasmi_ir"
+version = "0.40.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e431a14c186db59212a88516788bd68ed51f87aa1e08d1df742522867b5289a"
+dependencies = [
+ "wasmi_core",
+]
+
+[[package]]
+name = "wasmparser"
+version = "0.221.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d06bfa36ab3ac2be0dee563380147a5b81ba10dd8885d7fbbc9eb574be67d185"
+dependencies = [
+ "bitflags 2.13.2",
+ "indexmap 2.14.2",
 ]
 
 [[package]]

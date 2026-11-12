@@ -19,7 +19,7 @@ class ChainIdSourceTest {
         )
         assertFalse(KvncAddress.legacyAllowed(ChainIds.MAINNET))
         assertFalse(KvncAddress.legacyAllowed(ChainIds.TESTNET_V1))
-        assertTrue(KvncAddress.legacyAllowed(ChainIds.TESTNET))
+        assertFalse(KvncAddress.legacyAllowed(ChainIds.TESTNET))
         assertFalse(KvncAddress.legacyAllowed(ChainIds.UNSPECIFIED))
     }
 }

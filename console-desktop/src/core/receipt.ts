@@ -94,7 +94,7 @@ export function formatReceipt(view: ExecutionReceipt): string {
   return lines.join("\n");
 }
 
-/** Ask a Chain 5 node for its sync status. A down node is unreachable, never a fake receipt. */
+/** Ask a Chain 2 node for its sync status. A down node is unreachable, never a fake receipt. */
 export async function probeChain5(extra?: string, timeoutMs = 2500): Promise<LiveProbe> {
   let last = "unreachable";
   let url = "";
@@ -117,8 +117,8 @@ export async function probeChain5(extra?: string, timeoutMs = 2500): Promise<Liv
         continue;
       }
       const chainId = chainIdOf(body.result);
-      if (chainId !== 5) {
-        return { url, reachable: true, chainId, error: chainId == null ? "no chain id" : `node reported chain ${chainId}, not 5` };
+      if (chainId !== 2) {
+        return { url, reachable: true, chainId, error: chainId == null ? "no chain id" : `node reported chain ${chainId}, not 2` };
       }
       return { url, reachable: true, chainId, error: null };
     } catch (error) {

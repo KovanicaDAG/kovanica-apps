@@ -9,8 +9,8 @@ class ChainIdsTest {
     @Test
     fun legacySetMatchesRust() {
         assertTrue(ChainIds.legacyAllowed(ChainIds.DEVNET))
-        assertTrue(ChainIds.legacyAllowed(ChainIds.CHAIN_4))
-        assertTrue(ChainIds.legacyAllowed(ChainIds.TESTNET_V2))
+        assertFalse(ChainIds.legacyAllowed(ChainIds.CHAIN_4))
+        assertFalse(ChainIds.legacyAllowed(ChainIds.TESTNET_V2))
         assertFalse(ChainIds.legacyAllowed(ChainIds.TESTNET))
         assertTrue(ChainIds.legacyAllowed(ChainIds.LOCAL))
         assertFalse(ChainIds.legacyAllowed(ChainIds.MAINNET))

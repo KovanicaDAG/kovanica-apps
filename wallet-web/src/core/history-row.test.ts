@@ -22,7 +22,7 @@ describe("contract history rows", () => {
     assert.equal(callNeed("token_transfer", "0", "1000", "5000"), 1000n);
     assert.equal(shortfall(4000n, 6000n), 2000n);
     assert.equal(shortfall(6000n, 6000n), 0n);
-    assert.equal(faucetQuick(5), true);
+    assert.equal(faucetQuick(2), true);
     assert.equal(faucetQuick(1337), true);
     assert.equal(faucetQuick(1), false);
     assert.equal(faucetQuick(4), false);

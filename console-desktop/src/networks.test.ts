@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest";
 import { NETWORK_PRESETS, presetById, presetFor } from "./networks";
 
 describe("connection network switch", () => {
-  it("offers the live chain-4 testnet first", () => {
+  it("offers the live chain-2 testnet first", () => {
     expect(NETWORK_PRESETS[0]).toEqual({
       id: "testnet",
-      label: "Testnet (Chain 4)",
-      chainId: 4,
+      label: "Testnet (Chain 2)",
+      chainId: 2,
       rpcUrl: "https://rpc-testnet.kovanica.online/rpc",
     });
   });
