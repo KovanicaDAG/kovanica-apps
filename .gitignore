@@ -10,3 +10,9 @@ build/
 android-wallet/app/src/main/jniLibs/
 .vercel/
 **/.vercel/
+
+# Android release signing material — never commit. See docs/android-release-build.md.
+*.jks
+*.keystore
+android-wallet/keystore/
+android-comms/keystore/
